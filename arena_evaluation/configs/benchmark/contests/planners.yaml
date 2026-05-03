@@ -1,0 +1,3 @@
+name: basic
+inter_planner: bypass
+local_planner: [teb, dwa, dragon, rosnav, applr, lflh, trail, cohan]
