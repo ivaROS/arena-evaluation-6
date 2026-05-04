@@ -199,7 +199,7 @@ Inspection helpers:
 - `arena evaluation status [run_id] [--watch]` — snapshot or live view (subscribes to `/arena/benchmark/state` TRANSIENT_LOCAL).
 - `arena evaluation tail [run_id]` — tail -F on `progress.csv` of the most recent (or named) run.
 
-`progress.csv` schema: `ts_iso, run_id, step_key, contestant, stage, env_id, episode_id, world, seed, tm_robots, tm_obstacles, tm_modules, robots, outcome_state, outcome_reason, started_at, ended_at, runtime_s, robots_params_json, obstacles_params_json, error_kind, error_detail`
+`progress.csv` schema: `ts_iso, run_id, step_key, contestant, stage, env_id, episode_id, world, seed, tm_robots, tm_obstacles, tm_modules, robots, outcome_state, outcome_info, started_at, ended_at, runtime_s, robots_params_json, obstacles_params_json, error_kind, error_detail`
 
 Step status values in `.benchmark_state.json`: `ok | partial | failed | skipped | in_progress`.
 

@@ -55,7 +55,7 @@ def _make_episode_record(
     tm_modules: list[str] | None = None,
     robots: list[str] | None = None,
     outcome_state: int = 1,
-    outcome_reason: str = "",
+    outcome_info: str = "",
     robots_params: list | None = None,
     obstacles_params: list | None = None,
 ) -> types.SimpleNamespace:
@@ -68,7 +68,7 @@ def _make_episode_record(
         tm_modules=tm_modules or [],
         robots=robots or ["turtlebot3_burger"],
         outcome_state=outcome_state,
-        outcome_reason=outcome_reason,
+        outcome_info=outcome_info,
         robots_params=robots_params or [],
         obstacles_params=obstacles_params or [],
     )
@@ -194,7 +194,7 @@ def test_state_file_backward_compat_error_field(tmp_path: pathlib.Path):
 _EXPECTED_HEADERS = [
     "ts_iso", "run_id", "step_key", "contestant", "stage", "env_id", "episode_id",
     "world", "seed", "tm_robots", "tm_obstacles", "tm_modules", "robots",
-    "outcome_state", "outcome_reason", "started_at", "ended_at", "runtime_s",
+    "outcome_state", "outcome_info", "started_at", "ended_at", "runtime_s",
     "robots_params_json", "obstacles_params_json",
     "error_kind", "error_detail",
 ]
@@ -226,11 +226,11 @@ def test_progress_log_append(tmp_path: pathlib.Path):
         episode_id=1, world="map1", seed=42,
         tm_robots="random", tm_obstacles="random",
         tm_modules=["benchmark"], robots=["burger"],
-        outcome_state=1, outcome_reason="",
+        outcome_state=1, outcome_info="",
     )
     rec2 = _make_episode_record(
         episode_id=2, world="map1", seed=43,
-        outcome_state=2, outcome_reason="collision",
+        outcome_state=2, outcome_info="collision",
     )
 
     ts = datetime.datetime.now(tz=datetime.UTC).isoformat()
@@ -281,7 +281,7 @@ def test_progress_log_append(tmp_path: pathlib.Path):
     assert r0["tm_modules"] == "benchmark"
     assert r0["robots"] == "burger"
     assert r0["outcome_state"] == "1"
-    assert r0["outcome_reason"] == ""
+    assert r0["outcome_info"] == ""
     assert json.loads(r0["robots_params_json"]) == []
     assert json.loads(r0["obstacles_params_json"]) == []
     assert r0["error_kind"] == ""
@@ -290,7 +290,7 @@ def test_progress_log_append(tmp_path: pathlib.Path):
     r1 = rows[1]
     assert r1["episode_id"] == "2"
     assert r1["outcome_state"] == "2"
-    assert r1["outcome_reason"] == "collision"
+    assert r1["outcome_info"] == "collision"
     assert r1["error_kind"] == "episode_timeout"
     assert r1["error_detail"] == "stage.timeout exceeded"
 
@@ -722,8 +722,8 @@ def test_dedupe_in_place_keeps_latest_ts(tmp_path: pathlib.Path):
     t0 = time.time()
     ts_old = "2024-01-01T00:00:01+00:00"
     ts_new = "2024-01-01T00:00:05+00:00"
-    rec = _make_episode_record(episode_id=1, outcome_reason="old")
-    rec_new = _make_episode_record(episode_id=1, outcome_reason="new")
+    rec = _make_episode_record(episode_id=1, outcome_info="old")
+    rec_new = _make_episode_record(episode_id=1, outcome_info="new")
     log.append(ts_iso=ts_old, run_id="r", step_key="p/s", contestant="p", stage="s",
                 env_id=0, episode_id=1, episode_record=rec, started_at=t0, ended_at=t0 + 1.0)
     log.append(ts_iso=ts_new, run_id="r", step_key="p/s", contestant="p", stage="s",
@@ -734,7 +734,7 @@ def test_dedupe_in_place_keeps_latest_ts(tmp_path: pathlib.Path):
     with path.open(newline="") as fh:
         rows = list(csv.DictReader(fh))
     assert len(rows) == 1
-    assert rows[0]["outcome_reason"] == "new"
+    assert rows[0]["outcome_info"] == "new"
     assert rows[0]["ts_iso"] == ts_new
 
 

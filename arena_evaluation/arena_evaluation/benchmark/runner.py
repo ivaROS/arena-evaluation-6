@@ -478,11 +478,11 @@ class BenchmarkRunner(ArenaMixinNode):
             if result.state == RunEpisode.Result.FATAL:
                 self.get_logger().error(
                     f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
-                    f"FATAL: {result.reason} -- aborting step"
+                    f"FATAL: {result.info} -- aborting step"
                 )
                 return StepResult(
                     step.key, "failed", env_id, started, time.time(),
-                    StepErrorKind.ROBOT_SETUP, f"env reported FATAL: {result.reason}",
+                    StepErrorKind.ROBOT_SETUP, f"env reported FATAL: {result.info}",
                     episodes_run=episodes_run, episodes_failed=episodes_failed,
                 )
 
@@ -507,7 +507,7 @@ class BenchmarkRunner(ArenaMixinNode):
             }.get(rec.outcome_state, str(rec.outcome_state))
             self.get_logger().info(
                 f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
-                f"{state_label} reason={rec.outcome_reason!r} "
+                f"{state_label} info={rec.outcome_info!r} "
                 f"sim={ep_ended_sim - ep_started_sim:.1f}s "
                 f"wall={ep_ended_wall - ep_started_wall:.1f}s"
             )
