@@ -265,6 +265,7 @@ class BenchmarkRunner(ArenaMixinNode):
         run_dir: RunDir,
         retry_failed: bool = False,
         arena_passthrough: dict[str, str] | None = None,
+        noexit: bool = False,
     ) -> None:
         super().__init__("arena_benchmark_runner")
         self._suite = suite
@@ -277,6 +278,9 @@ class BenchmarkRunner(ArenaMixinNode):
         self._run_dir = run_dir
         self._retry_failed = retry_failed
         self._arena_passthrough: dict[str, str] = dict(arena_passthrough or {})
+        self._noexit = noexit
+        self._total_groups = 0
+        self._completed_groups = 0
 
         self._spawn = self.create_client_wrapper(SpawnEnv, "/arena/spawn_env")
         self._despawn = self.create_client_wrapper(DespawnEnv, "/arena/despawn_env")
@@ -643,15 +647,25 @@ class BenchmarkRunner(ArenaMixinNode):
                         "aborted by upstream step setup failure",
                     ))
         finally:
+            self._completed_groups += 1
+            keep_alive = (
+                self._noexit
+                and self._completed_groups == self._total_groups
+                and env_id is not None
+            )
             if env_id is not None:
                 self._teardown_env_clients(env_id)
-                if env_id in self._env_records:
+                if env_id in self._env_records and not keep_alive:
                     with contextlib.suppress(Exception):
                         dreq = DespawnEnv.Request()
                         dreq.env_id = env_id
                         await self._despawn.call_timeout(dreq, timeout_sec=30.0)
                     with contextlib.suppress(asyncio.TimeoutError, Exception):
                         await self._wait_env_gone(env_id, timeout=30.0)
+                if keep_alive:
+                    self.get_logger().info(
+                        f"--noexit: keeping env {env_id} alive after last group {group[0].key}"
+                    )
         return results
 
     def _publish_state(
@@ -692,6 +706,11 @@ class BenchmarkRunner(ArenaMixinNode):
         await self._shutdown_arena()
 
     async def _shutdown_arena(self) -> None:
+        if self._noexit:
+            self.get_logger().info(
+                "--noexit: leaving arena.launch.py running; Ctrl+C its terminal to stop"
+            )
+            return
         p = self._arena_proc
         if p is None or p.poll() is not None:
             return
@@ -735,6 +754,7 @@ class BenchmarkRunner(ArenaMixinNode):
         await self._despawn.ensure(timeout_sec=300.0)
 
         groups = group_pending(pending, self._simulator)
+        self._total_groups = len(groups)
         cap = max(1, min(self._env_n, len(groups) or 1))
         free_slots: list[int] = list(range(cap))
         in_flight: set[asyncio.Task[list[StepResult]]] = set()
@@ -886,6 +906,12 @@ def cli_main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--retry-failed", action="store_true")
     p.add_argument("--force", action="store_true")
+    p.add_argument(
+        "--noexit",
+        action="store_true",
+        help="On completion, leave arena.launch.py and the last env running so you "
+             "can poke at it. Recording stops with the last episode as usual.",
+    )
     args, extras = p.parse_known_args(argv)
 
     for arg in extras:
@@ -1018,6 +1044,7 @@ def cli_main(argv: list[str] | None = None) -> int:
             run_dir=run_dir,
             retry_failed=args.retry_failed,
             arena_passthrough=arena_passthrough,
+            noexit=args.noexit,
         )
     except KeyboardInterrupt:
         return 130
