@@ -447,87 +447,110 @@ class BenchmarkRunner(ArenaMixinNode):
         episodes_failed = 0
         ac = self._episode_action_clients[env_id]
 
-        for ep_idx in range(step.episodes):
-            goal = RunEpisode.Goal()
-            goal.world = step.stage.map
-            goal.seed = step.stage.seed
+        try:
+            for ep_idx in range(step.episodes):
+                goal = RunEpisode.Goal()
+                goal.world = step.stage.map
+                goal.seed = step.stage.seed
 
-            ep_started_sim = self.sim_time.to_seconds()
-            ep_started_wall = time.time()
+                ep_started_sim = self.sim_time.to_seconds()
+                ep_started_wall = time.time()
 
-            goal_handle = await self._await_or_env_died(
-                env_id, ac.send_goal(goal)
+                goal_handle = await self._await_or_env_died(
+                    env_id, ac.send_goal(goal)
+                )
+
+                try:
+                    result_obj = await asyncio.wait_for(
+                        self._await_or_env_died(env_id, ac.await_result(goal_handle)),
+                        timeout=step.stage.timeout,
+                    )
+                except TimeoutError:
+                    episodes_failed += 1
+                    self.get_logger().warning(
+                        f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
+                        f"TIMEOUT after {step.stage.timeout}s; cancelling and advancing"
+                    )
+                    with contextlib.suppress(Exception):
+                        await self.await_ros(goal_handle.cancel_goal_async())
+                    continue
+                ep_ended_sim = self.sim_time.to_seconds()
+                ep_ended_wall = time.time()
+
+                result: RunEpisode.Result = result_obj.result
+                episode_id = result.episode_id
+
+                if result.state == RunEpisode.Result.FATAL:
+                    self.get_logger().error(
+                        f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
+                        f"FATAL: {result.info} -- aborting step"
+                    )
+                    return StepResult(
+                        step.key, "failed", env_id, started, time.time(),
+                        StepErrorKind.ROBOT_SETUP, f"env reported FATAL: {result.info}",
+                        episodes_run=episodes_run, episodes_failed=episodes_failed,
+                    )
+
+                recs = self._episode_records.get(env_id, {})
+                rec = recs.get(episode_id)
+                if rec is None:
+                    episodes_failed += 1
+                    self.get_logger().warning(
+                        f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
+                        f"no EpisodeRecord for episode_id={episode_id}; counted as failed"
+                    )
+                    continue
+
+                episodes_run += 1
+                if rec.outcome_state == EpisodeRecord.FAILED:
+                    episodes_failed += 1
+
+                state_label = {
+                    EpisodeRecord.SUCCESS: "SUCCESS",
+                    EpisodeRecord.FAILED: "FAILED",
+                    EpisodeRecord.SKIPPED: "SKIPPED",
+                }.get(rec.outcome_state, str(rec.outcome_state))
+                self.get_logger().info(
+                    f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
+                    f"{state_label} info={rec.outcome_info!r} "
+                    f"sim={ep_ended_sim - ep_started_sim:.1f}s "
+                    f"wall={ep_ended_wall - ep_started_wall:.1f}s"
+                )
+
+                ts_iso = datetime.datetime.now(tz=datetime.UTC).isoformat()
+                self._run_dir.progress.append(
+                    ts_iso=ts_iso,
+                    run_id=self._run_id,
+                    step_key=step.key,
+                    contestant=step.contestant.name,
+                    stage=step.stage.name,
+                    env_id=env_id,
+                    episode_id=episode_id,
+                    episode_record=rec,
+                    started_at=ep_started_sim,
+                    ended_at=ep_ended_sim,
+                )
+        except _EnvDied as exc:
+            self.get_logger().warning(
+                f"{step.key} env={env_id} env died mid-step after "
+                f"run={episodes_run}, failed={episodes_failed}: {exc}"
             )
-
-            try:
-                result_obj = await asyncio.wait_for(
-                    self._await_or_env_died(env_id, ac.await_result(goal_handle)),
-                    timeout=step.stage.timeout,
-                )
-            except TimeoutError:
-                episodes_failed += 1
-                self.get_logger().warning(
-                    f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
-                    f"TIMEOUT after {step.stage.timeout}s; cancelling and advancing"
-                )
-                with contextlib.suppress(Exception):
-                    await self.await_ros(goal_handle.cancel_goal_async())
-                continue
-            ep_ended_sim = self.sim_time.to_seconds()
-            ep_ended_wall = time.time()
-
-            result: RunEpisode.Result = result_obj.result
-            episode_id = result.episode_id
-
-            if result.state == RunEpisode.Result.FATAL:
-                self.get_logger().error(
-                    f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
-                    f"FATAL: {result.info} -- aborting step"
-                )
-                return StepResult(
-                    step.key, "failed", env_id, started, time.time(),
-                    StepErrorKind.ROBOT_SETUP, f"env reported FATAL: {result.info}",
-                    episodes_run=episodes_run, episodes_failed=episodes_failed,
-                )
-
-            recs = self._episode_records.get(env_id, {})
-            rec = recs.get(episode_id)
-            if rec is None:
-                episodes_failed += 1
-                self.get_logger().warning(
-                    f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
-                    f"no EpisodeRecord for episode_id={episode_id}; counted as failed"
-                )
-                continue
-
-            episodes_run += 1
-            if rec.outcome_state == EpisodeRecord.FAILED:
-                episodes_failed += 1
-
-            state_label = {
-                EpisodeRecord.SUCCESS: "SUCCESS",
-                EpisodeRecord.FAILED: "FAILED",
-                EpisodeRecord.SKIPPED: "SKIPPED",
-            }.get(rec.outcome_state, str(rec.outcome_state))
-            self.get_logger().info(
-                f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
-                f"{state_label} info={rec.outcome_info!r} "
-                f"sim={ep_ended_sim - ep_started_sim:.1f}s "
-                f"wall={ep_ended_wall - ep_started_wall:.1f}s"
+            return StepResult(
+                step.key, "failed", env_id, started, time.time(),
+                StepErrorKind.ENV_SETUP, repr(exc),
+                episodes_run=episodes_run, episodes_failed=episodes_failed,
             )
-
-            ts_iso = datetime.datetime.now(tz=datetime.UTC).isoformat()
-            self._run_dir.progress.append(
-                ts_iso=ts_iso,
-                run_id=self._run_id,
-                step_key=step.key,
-                contestant=step.contestant.name,
-                stage=step.stage.name,
-                env_id=env_id,
-                episode_id=episode_id,
-                episode_record=rec,
-                started_at=ep_started_sim,
-                ended_at=ep_ended_sim,
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.get_logger().exception(
+                f"{step.key} env={env_id} unexpected error mid-step after "
+                f"run={episodes_run}, failed={episodes_failed}"
+            )
+            return StepResult(
+                step.key, "failed", env_id, started, time.time(),
+                StepErrorKind.INTERNAL, repr(exc),
+                episodes_run=episodes_run, episodes_failed=episodes_failed,
             )
 
         if episodes_run == 0:
@@ -580,11 +603,6 @@ class BenchmarkRunner(ArenaMixinNode):
 
                 try:
                     step_result = await self._run_episodes(step, env_id)
-                except _EnvDied as exc:
-                    step_result = StepResult(
-                        step.key, "failed", env_id, time.time(), time.time(),
-                        StepErrorKind.ENV_SETUP, repr(exc),
-                    )
                 except asyncio.CancelledError:
                     step_result = StepResult(
                         step.key, "skipped", env_id, time.time(), time.time(),
@@ -853,16 +871,25 @@ def _is_inline_contest(contest_name: str) -> bool:
     return stripped.startswith("[") or stripped.startswith("{")
 
 
+def _is_inline_suite(suite_name: str) -> bool:
+    stripped = suite_name.strip()
+    return stripped.startswith("[") or stripped.startswith("{")
+
+
 def _load_suite_contest(
     suite_name: str, contest_name: str
 ) -> tuple[Suite, Contest, dict, list | dict]:
     share = pathlib.Path(get_package_share_directory("arena_evaluation"))
     bench_dir = share / "configs" / "benchmark"
 
-    suite_stem = suite_name.removesuffix(".yaml")
-    suite_path = bench_dir / "suites" / f"{suite_stem}.yaml"
-    suite_dict = yaml.safe_load(suite_path.read_text())
-    suite = Suite.parse(suite_stem, suite_dict)
+    if _is_inline_suite(suite_name):
+        suite_dict = yaml.safe_load(suite_name)
+        suite = Suite.parse("inline", suite_dict)
+    else:
+        suite_stem = suite_name.removesuffix(".yaml")
+        suite_path = bench_dir / "suites" / f"{suite_stem}.yaml"
+        suite_dict = yaml.safe_load(suite_path.read_text())
+        suite = Suite.parse(suite_stem, suite_dict)
 
     if _is_inline_contest(contest_name):
         contest_dict = yaml.safe_load(contest_name)
@@ -878,7 +905,10 @@ def _load_suite_contest(
 
 def _default_run_id(suite_name: str, contest_name: str) -> str:
     ts = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d-%H%M%S")
-    suite_stem = pathlib.Path(suite_name.removesuffix(".yaml")).stem
+    if _is_inline_suite(suite_name):
+        suite_stem = "inline"
+    else:
+        suite_stem = pathlib.Path(suite_name.removesuffix(".yaml")).stem
     if _is_inline_contest(contest_name):
         contest_stem = "inline"
     else:
