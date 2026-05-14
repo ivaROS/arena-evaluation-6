@@ -80,7 +80,7 @@ class Manifest:
     arena_git_dirty: bool
     cli_args: list[str]
     env_n: int
-    headless_mode: int
+    headless: bool
     config_hash: str
     simulator: str | None
     scale_episodes: float

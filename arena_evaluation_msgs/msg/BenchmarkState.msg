@@ -6,7 +6,7 @@ string contest
 string simulator        # empty when --sim not given
 
 uint32 env_n
-int32  headless_mode    # mirrors arena.launch.py headless arg
+bool   headless         # headless flag passed to the run
 
 uint32 steps_total
 uint32 steps_done       # status=ok

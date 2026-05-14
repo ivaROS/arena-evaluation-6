@@ -9,15 +9,14 @@ import time
 import types
 
 import pytest
-from arena_evaluation.benchmark.step import Step, StepErrorKind, StepResult
 from arena_evaluation.benchmark.config import Contest, Suite, _parse_duration
 from arena_evaluation.benchmark.runner import (
     _default_run_id,
     build_launch_args,
     build_pending,
-    per_spawn_headless,
 )
 from arena_evaluation.benchmark.state import ProgressLog, StateFile, compute_config_hash
+from arena_evaluation.benchmark.step import Step, StepErrorKind, StepResult
 from task_generator.constants import Constants
 
 # ---------------------------------------------------------------------------
@@ -489,42 +488,6 @@ def test_build_launch_args_no_sim_when_simulator_none():
     assert not any(a.startswith("sim:=") for a in args)
     assert "robot:=turtlebot3_burger" in args
     assert "world:=map1" in args
-
-
-# ---------------------------------------------------------------------------
-# per_spawn_headless
-# ---------------------------------------------------------------------------
-
-def test_per_spawn_headless_mode_0_first_env():
-    assert per_spawn_headless(0, 0) is False
-
-
-def test_per_spawn_headless_mode_0_other_env():
-    assert per_spawn_headless(1, 0) is True
-
-
-def test_per_spawn_headless_mode_1_first_env():
-    assert per_spawn_headless(0, 1) is False
-
-
-def test_per_spawn_headless_mode_1_other_env():
-    assert per_spawn_headless(1, 1) is True
-
-
-def test_per_spawn_headless_mode_2_first_env():
-    assert per_spawn_headless(0, 2) is True
-
-
-def test_per_spawn_headless_mode_2_other_env():
-    assert per_spawn_headless(1, 2) is True
-
-
-def test_per_spawn_headless_mode_negative_first_env():
-    assert per_spawn_headless(0, -1) is False
-
-
-def test_per_spawn_headless_mode_negative_other_env():
-    assert per_spawn_headless(1, -1) is False
 
 
 # ---------------------------------------------------------------------------

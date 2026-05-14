@@ -32,7 +32,6 @@ from task_generator_msgs.srv import QueueEpisode
 
 STATE_TOPIC = "/arena/benchmark/state"
 
-from .step import Step, StepErrorKind, StepResult
 from .config import Contest, Suite
 from .state import (
     Manifest,
@@ -41,6 +40,7 @@ from .state import (
     compute_config_hash,
     find_most_recent_resumable,
 )
+from .step import Step, StepErrorKind, StepResult
 
 # ---------------------------------------------------------------------------
 # Free functions (testable without ROS init)
@@ -91,11 +91,6 @@ def build_launch_args(step: Step, simulator: str | None) -> list[str]:
         if v:
             args.append(f"{k}:={v}")
     return args
-
-
-def per_spawn_headless(env_index: int, headless_mode: int) -> bool:
-    """Mirrors arena_node._spawn_initial_envs; see arena.launch.py headless arg."""
-    return bool(headless_mode > 1) if env_index == 0 else bool(headless_mode > -1)
 
 
 def build_pending(
@@ -261,7 +256,7 @@ class BenchmarkRunner(ArenaMixinNode):
         scale_episodes: float,
         env_n: int,
         run_id: str,
-        headless_mode: int,
+        headless: bool,
         run_dir: RunDir,
         retry_failed: bool = False,
         arena_passthrough: dict[str, str] | None = None,
@@ -274,7 +269,7 @@ class BenchmarkRunner(ArenaMixinNode):
         self._scale_episodes = scale_episodes
         self._env_n = env_n
         self._run_id = run_id
-        self._headless_mode = headless_mode
+        self._headless = headless
         self._run_dir = run_dir
         self._retry_failed = retry_failed
         self._arena_passthrough: dict[str, str] = dict(arena_passthrough or {})
@@ -319,9 +314,6 @@ class BenchmarkRunner(ArenaMixinNode):
 
     def _build_launch_args(self, step: Step) -> list[str]:
         return build_launch_args(step, self._simulator)
-
-    def _per_spawn_headless(self, env_index: int) -> bool:
-        return per_spawn_headless(env_index, self._headless_mode)
 
     async def _await_env_visible(self, env_id: int) -> None:
         """Wait for env_id to appear on /arena/state/envs.
@@ -578,7 +570,7 @@ class BenchmarkRunner(ArenaMixinNode):
         try:
             req = SpawnEnv.Request()
             req.ns = ""
-            req.headless = self._per_spawn_headless(slot_index)
+            req.headless = self._headless
             req.launch_args = self._build_launch_args(group[0])
             resp = await self.await_ros(self._spawn.client.call_async(req))
             if resp is None or not resp.success:
@@ -714,7 +706,7 @@ class BenchmarkRunner(ArenaMixinNode):
         msg.contest = self._contest.name
         msg.simulator = self._simulator or ""
         msg.env_n = self._env_n
-        msg.headless_mode = self._headless_mode
+        msg.headless = self._headless
         msg.steps_total = steps_total
         msg.steps_done = sum(1 for r in results.values() if r.status == "ok")
         msg.steps_partial = sum(1 for r in results.values() if r.status == "partial")
@@ -740,7 +732,7 @@ class BenchmarkRunner(ArenaMixinNode):
     async def _shutdown_arena(self) -> None:
         if self._noexit:
             self.get_logger().info(
-                "--noexit: leaving arena.launch.py running; Ctrl+C its terminal to stop"
+                "--noexit: leaving arena_runtime.launch.py running; Ctrl+C its terminal to stop"
             )
             return
         p = self._arena_proc
@@ -770,9 +762,8 @@ class BenchmarkRunner(ArenaMixinNode):
         self.get_logger().info(f"benchmark: signalled READY on {STATE_TOPIC}")
 
         passthrough = dict(self._arena_passthrough)
-        passthrough["env_n"] = "0"
         cmd = [
-            "ros2", "launch", "arena_bringup", "arena.launch.py",
+            "ros2", "launch", "arena_bringup", "arena_runtime.launch.py",
             *(f"{k}:={v}" for k, v in passthrough.items()),
         ]
         self._arena_proc = subprocess.Popen(
@@ -955,7 +946,7 @@ def cli_main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--noexit",
         action="store_true",
-        help="On completion, leave arena.launch.py and the last env running so you "
+        help="On completion, leave arena_runtime.launch.py and the last env running so you "
              "can poke at it. Recording stops with the last episode as usual.",
     )
     args, extras = p.parse_known_args(argv)
@@ -970,7 +961,7 @@ def cli_main(argv: list[str] | None = None) -> int:
         arena_passthrough[k] = v
 
     env_n = int(arena_passthrough.get("env_n", "1"))
-    headless_mode = int(arena_passthrough.get("headless", "0"))
+    headless = arena_passthrough.get("headless", "false").lower() in ("true", "1")
     simulator = arena_passthrough.get("sim", None)
 
     try:
@@ -1052,7 +1043,7 @@ def cli_main(argv: list[str] | None = None) -> int:
                 arena_git_dirty=dirty,
                 cli_args=sys.argv[1:] if argv is None else list(argv),
                 env_n=env_n,
-                headless_mode=headless_mode,
+                headless=headless,
                 config_hash=cfg_hash,
                 simulator=simulator,
                 scale_episodes=args.scale_episodes,
@@ -1086,7 +1077,7 @@ def cli_main(argv: list[str] | None = None) -> int:
             scale_episodes=args.scale_episodes,
             env_n=env_n,
             run_id=run_dir.manifest.run_id,
-            headless_mode=headless_mode,
+            headless=headless,
             run_dir=run_dir,
             retry_failed=args.retry_failed,
             arena_passthrough=arena_passthrough,
