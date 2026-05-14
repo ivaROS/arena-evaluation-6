@@ -489,6 +489,7 @@ class BenchmarkRunner(ArenaMixinNode):
                         step.key, "failed", env_id, started, time.time(),
                         StepErrorKind.ROBOT_SETUP, f"env reported FATAL: {result.info}",
                         episodes_run=episodes_run, episodes_failed=episodes_failed,
+                        episodes_total=step.episodes,
                     )
 
                 recs = self._episode_records.get(env_id, {})
@@ -539,6 +540,7 @@ class BenchmarkRunner(ArenaMixinNode):
                 step.key, "failed", env_id, started, time.time(),
                 StepErrorKind.ENV_SETUP, repr(exc),
                 episodes_run=episodes_run, episodes_failed=episodes_failed,
+                episodes_total=step.episodes,
             )
         except asyncio.CancelledError:
             raise
@@ -551,6 +553,7 @@ class BenchmarkRunner(ArenaMixinNode):
                 step.key, "failed", env_id, started, time.time(),
                 StepErrorKind.INTERNAL, repr(exc),
                 episodes_run=episodes_run, episodes_failed=episodes_failed,
+                episodes_total=step.episodes,
             )
 
         if episodes_run == 0:
@@ -566,6 +569,7 @@ class BenchmarkRunner(ArenaMixinNode):
             step.key, status, env_id, started, time.time(),
             None, None,
             episodes_run=episodes_run, episodes_failed=episodes_failed,
+            episodes_total=step.episodes,
         )
 
     async def _run_group(self, group: list[Step], slot_index: int) -> list[StepResult]:
@@ -582,6 +586,7 @@ class BenchmarkRunner(ArenaMixinNode):
                 failed = StepResult(
                     group[0].key, "failed", None, time.time(), time.time(),
                     StepErrorKind.ENV_SETUP, f"spawn_env failed: {msg}",
+                    episodes_total=group[0].episodes,
                 )
                 results.append(failed)
                 for step in group[1:]:
@@ -589,6 +594,7 @@ class BenchmarkRunner(ArenaMixinNode):
                         step.key, "skipped", None, time.time(), time.time(),
                         StepErrorKind.CANCELLED,
                         "aborted by upstream step setup failure",
+                        episodes_total=step.episodes,
                     ))
                 return results
             env_id = resp.env_id
@@ -607,12 +613,14 @@ class BenchmarkRunner(ArenaMixinNode):
                     step_result = StepResult(
                         step.key, "skipped", env_id, time.time(), time.time(),
                         StepErrorKind.CANCELLED, "cancelled",
+                        episodes_total=step.episodes,
                     )
                     results.append(step_result)
                     for remaining in group[idx + 1:]:
                         results.append(StepResult(
                             remaining.key, "skipped", env_id, time.time(), time.time(),
                             StepErrorKind.CANCELLED, "cancelled",
+                            episodes_total=remaining.episodes,
                         ))
                     raise
 
@@ -624,6 +632,7 @@ class BenchmarkRunner(ArenaMixinNode):
                             remaining.key, "skipped", env_id, time.time(), time.time(),
                             StepErrorKind.CANCELLED,
                             "aborted by upstream step setup failure",
+                            episodes_total=remaining.episodes,
                         ))
                     break
 
@@ -632,6 +641,7 @@ class BenchmarkRunner(ArenaMixinNode):
                 results.append(StepResult(
                     group[0].key, "failed", env_id, time.time(), time.time(),
                     StepErrorKind.ENV_SETUP, repr(exc),
+                    episodes_total=group[0].episodes,
                 ))
             already = {r.key for r in results}
             for step in group:
@@ -640,6 +650,7 @@ class BenchmarkRunner(ArenaMixinNode):
                         step.key, "skipped", env_id, time.time(), time.time(),
                         StepErrorKind.CANCELLED,
                         "aborted by upstream step setup failure",
+                        episodes_total=step.episodes,
                     ))
         except asyncio.CancelledError:
             already = {r.key for r in results}
@@ -648,6 +659,7 @@ class BenchmarkRunner(ArenaMixinNode):
                     results.append(StepResult(
                         step.key, "skipped", env_id, time.time(), time.time(),
                         StepErrorKind.CANCELLED, "cancelled",
+                        episodes_total=step.episodes,
                     ))
             raise
         except Exception as exc:
@@ -655,6 +667,7 @@ class BenchmarkRunner(ArenaMixinNode):
                 results.append(StepResult(
                     group[0].key, "failed", env_id, time.time(), time.time(),
                     StepErrorKind.INTERNAL, repr(exc),
+                    episodes_total=group[0].episodes,
                 ))
             already = {r.key for r in results}
             for step in group:
@@ -663,6 +676,7 @@ class BenchmarkRunner(ArenaMixinNode):
                         step.key, "skipped", env_id, time.time(), time.time(),
                         StepErrorKind.CANCELLED,
                         "aborted by upstream step setup failure",
+                        episodes_total=step.episodes,
                     ))
         finally:
             self._completed_groups += 1
@@ -780,7 +794,8 @@ class BenchmarkRunner(ArenaMixinNode):
         def _mark_group_in_progress(group: list[Step]) -> None:
             for step in group:
                 results[step.key] = StepResult(
-                    step.key, "in_progress", None, time.time(), None, None, None
+                    step.key, "in_progress", None, time.time(), None, None, None,
+                    episodes_total=step.episodes,
                 )
             self._run_dir.state.write(results)
             self._publish_state(results, steps_total)
@@ -791,7 +806,8 @@ class BenchmarkRunner(ArenaMixinNode):
                 results[res.key] = res
                 self.get_logger().info(
                     f"[{res.status}] {res.key} env={res.env_id} "
-                    f"episodes={res.episodes_run}/{res.episodes_run + res.episodes_failed} "
+                    f"episodes={res.episodes_run}/{res.episodes_total} "
+                    f"(failed={res.episodes_failed}) "
                     f"t={((res.ended_at or 0.0) - res.started_at):.1f}s"
                 )
             self._run_dir.state.write(results)

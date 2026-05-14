@@ -40,3 +40,4 @@ class StepResult:
     error_detail: str | None
     episodes_run: int = 0
     episodes_failed: int = 0
+    episodes_total: int = 0
