@@ -68,15 +68,16 @@ There are two forms: **list** and **sweep**.
 ### List form
 
 Top-level YAML is a sequence. Each entry must have `name`; all other keys
-become `args` forwarded to `Robot.parse` via the `SpawnRobot` service.
+become `args` forwarded to `Robot.parse` via the `SpawnRobot` service. Use
+the cap-scoped form (see [Contestant args](#contestant-args) below).
 
 ```yaml
 - name: teb
-  local_planner: teb
-  inter_planner: navigate_w_replanning_time
+  mobile.local_planner: teb
+  mobile.inter_planner: navigate_w_replanning_time
 - name: dwa-rl
-  local_planner: dwa
-  agent_name: my_agent
+  mobile: rosnav_rl
+  mobile.agent: my_agent
 ```
 
 ### Sweep form
@@ -85,8 +86,8 @@ Top-level YAML is a mapping. List values are sweep axes; non-list values are
 constants shared by all contestants. The runner takes the cartesian product.
 
 ```yaml
-local_planner: [teb, dwa, rosnav]
-inter_planner: bypass
+mobile.local_planner: [teb, dwa, rosnav]
+mobile.inter_planner: bypass
 ```
 
 produces three contestants. `name` is auto-derived from the keys that vary
@@ -96,16 +97,16 @@ order.
 
 ```yaml
 # 4 contestants: dwa-navfn, dwa-smac, teb-navfn, teb-smac
-local_planner: [dwa, teb]
-global_planner: [navfn, smac]
+mobile.local_planner: [dwa, teb]
+mobile.global_planner: [navfn, smac]
 ```
 
 A constant `name: <prefix>` prepends the prefix to all auto-derived names:
 
 ```yaml
 name: basic
-inter_planner: bypass
-local_planner: [teb, dwa, rosnav]
+mobile.inter_planner: bypass
+mobile.local_planner: [teb, dwa, rosnav]
 # produces: basic-teb, basic-dwa, basic-rosnav
 ```
 
@@ -118,16 +119,23 @@ Pass the YAML inline as the `--contest` value when the string starts with `[`
 or `{`:
 
 ```
-arena benchmark --suite basic --contest '[{name: teb, local_planner: teb}]'
-arena benchmark --suite basic --contest '{local_planner: [teb, dwa]}'
+arena benchmark --suite basic --contest '[{name: teb, mobile.local_planner: teb}]'
+arena benchmark --suite basic --contest '{mobile.local_planner: [teb, dwa]}'
 ```
 
 ### Contestant args
 
-A whitelisted subset of contestant `args` keys is forwarded as launch args to
-the env on spawn (so `nav2`, the controller, the agent, etc. come up correctly
-from the start). Forwarded keys: `local_planner`, `inter_planner`,
-`global_planner`, `navigator`, `agent_name`. Unknown keys are silently ignored.
+Contestant `args` keys are forwarded verbatim as launch args to the env on
+spawn (so nav2, the controller, the agent, etc. come up correctly from the
+start). See
+[BRINGUP.md → Cap-scoped overrides](../../../../arena_bringup/BRINGUP.md#cap-scoped-overrides)
+for the recommended key shapes.
+
+The runner drops keys that collide with stage-owned launch args (`sim`,
+`robot`, `world`, `tm_robots`, `tm_obstacles`, `run_seed`, `auto_reset`,
+`tm_modules`, `record_data_dir`) and logs a warning, since those are
+controlled by the suite stage. Anything else is passed through to the launch
+layer, which binds it if declared or raises an error if not.
 
 ## How the runner consumes these files
 
@@ -145,9 +153,9 @@ For each group the runner:
 
 1. Calls `/arena/spawn_env` once with the first step's launch args: `sim`,
    `robot`, `world`, `tm_robots`, `tm_obstacles`, `run_seed`,
-   `auto_reset:=false`, `tm_modules:=` (empty), and the whitelisted contestant
-   args (`local_planner`, `inter_planner`, `global_planner`, `navigator`,
-   `agent_name`). `record_data_dir` is added when recording is enabled.
+   `auto_reset:=false`, `tm_modules:=` (empty), and any contestant args of
+   shape `mobile`, `arm`, `mobile.<key>`, or `arm.<key>`. `record_data_dir`
+   is added when recording is enabled.
    Per-mode params (`task.scenario.file`, `task.random.*`, ...) are not passed
    as launch args; the runner sets them via QueueEpisode in step 3.
 2. Waits for the env to publish on `/arena/state/envs` and resolves the env

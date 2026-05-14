@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import datetime
 import json
+import logging
 import pathlib
 import re
 import time
@@ -40,7 +41,7 @@ def _make_stage(name: str = "s1") -> Suite.Stage:
 def _make_contestant(name: str = "planner_a", args: dict | None = None) -> Contest.Contestant:
     return Contest.Contestant(
         name=name,
-        args=args if args is not None else {"local_planner": "dwa"},
+        args=args if args is not None else {"mobile.local_planner": "dwa"},
     )
 
 
@@ -414,7 +415,7 @@ def _make_cell(
         seed=42,
         timeout=120.0,
     )
-    args = contestant_args if contestant_args is not None else {"local_planner": "dwa"}
+    args = contestant_args if contestant_args is not None else {"mobile.local_planner": "dwa"}
     contestant = Contest.Contestant(name=contestant_name, args=args)
     return Step(contestant=contestant, stage=stage, episodes=episodes, record_dir=record_dir)
 
@@ -458,28 +459,88 @@ def test_build_launch_args_scenario_not_in_launch():
     assert not any(a.startswith("scenario_file:=") for a in args)
 
 
-def test_build_launch_args_local_planner_forwarded():
-    cell = _make_cell(contestant_args={"local_planner": "teb"})
+def test_build_launch_args_cap_scoped_planner_forwarded():
+    cell = _make_cell(contestant_args={"mobile.local_planner": "teb"})
     args = build_launch_args(cell, "gazebo")
-    assert "local_planner:=teb" in args
+    assert "mobile.local_planner:=teb" in args
 
 
-def test_build_launch_args_unknown_contestant_arg_dropped():
-    cell = _make_cell(contestant_args={"local_planner": "dwa", "secret_knob": "x"})
+def test_build_launch_args_unknown_contestant_arg_forwarded():
+    """Non-stage-owned keys pass through verbatim; launch layer is the gate."""
+    cell = _make_cell(contestant_args={"mobile.local_planner": "dwa", "secret_knob": "x"})
     args = build_launch_args(cell, "gazebo")
-    assert not any("secret_knob" in a for a in args)
+    assert "secret_knob:=x" in args
 
 
-def test_build_launch_args_navigator_forwarded():
-    cell = _make_cell(contestant_args={"navigator": "nav2_holonomic", "local_planner": "teb"})
+def test_build_launch_args_stage_owned_key_dropped():
+    """A contestant key colliding with stage-owned args is logged and dropped."""
+    cell = _make_cell(contestant_args={"mobile.local_planner": "teb", "sim": "isaac"})
+    logger = logging.getLogger("arena_evaluation.benchmark.runner")
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Capture(level=logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        args = build_launch_args(cell, "gazebo")
+    finally:
+        logger.removeHandler(handler)
+    assert "sim:=gazebo" in args
+    assert "sim:=isaac" not in args
+    msgs = [r.getMessage() for r in records if r.levelname == "WARNING"]
+    assert any("'sim'" in m and "ignored" in m for m in msgs), msgs
+
+
+def test_build_launch_args_stage_owned_robot_dropped(caplog: pytest.LogCaptureFixture):
+    cell = _make_cell(contestant_args={"robot": "jackal", "world": "map2"})
+    with caplog.at_level("WARNING"):
+        args = build_launch_args(cell, "gazebo")
+    assert "robot:=turtlebot3_burger" in args
+    assert "robot:=jackal" not in args
+    assert "world:=map1" in args
+    assert "world:=map2" not in args
+
+
+def test_build_launch_args_empty_value_skipped():
+    """Empty-string values are skipped without forwarding or warning."""
+    cell = _make_cell(contestant_args={"mobile.local_planner": ""})
     args = build_launch_args(cell, "gazebo")
-    assert "navigator:=nav2_holonomic" in args
+    assert not any(a.startswith("mobile.local_planner") for a in args)
 
 
-def test_build_launch_args_no_navigator_when_absent():
-    cell = _make_cell(contestant_args={"local_planner": "dwa"})
+def test_build_launch_args_arm_cap_forwarded():
+    cell = _make_cell(contestant_args={"arm": "moveit", "arm.controller": "ompl"})
     args = build_launch_args(cell, "gazebo")
-    assert not any(a.startswith("navigator:=") for a in args)
+    assert "arm:=moveit" in args
+    assert "arm.controller:=ompl" in args
+
+
+def test_build_launch_args_multiple_cap_keys_all_pass():
+    cell = _make_cell(contestant_args={
+        "mobile.local_planner": "teb",
+        "mobile.inter_planner": "bypass",
+        "mobile.global_planner": "smac",
+    })
+    args = build_launch_args(cell, "gazebo")
+    assert "mobile.local_planner:=teb" in args
+    assert "mobile.inter_planner:=bypass" in args
+    assert "mobile.global_planner:=smac" in args
+
+
+def test_build_launch_args_mobile_adapter_forwarded():
+    cell = _make_cell(contestant_args={"mobile": "rosnav_rl", "mobile.agent": "best"})
+    args = build_launch_args(cell, "gazebo")
+    assert "mobile:=rosnav_rl" in args
+    assert "mobile.agent:=best" in args
+
+
+def test_build_launch_args_no_mobile_when_absent():
+    cell = _make_cell(contestant_args={"mobile.local_planner": "dwa"})
+    args = build_launch_args(cell, "gazebo")
+    assert not any(a == "mobile:=" or a.startswith("mobile:=") for a in args)
 
 
 def test_build_launch_args_no_sim_when_simulator_none():
@@ -770,7 +831,7 @@ def test_default_run_id_format():
 
 
 def test_default_run_id_inline():
-    run_id = _default_run_id("basic", "[{name: teb, local_planner: teb}]")
+    run_id = _default_run_id("basic", "[{name: teb, mobile.local_planner: teb}]")
     assert _RUN_ID_RE.match(run_id), f"run_id {run_id!r} did not match expected pattern"
     assert run_id.endswith("-basic-inline")
 

@@ -128,9 +128,6 @@ def read_datasets(data_paths):
             "path": lambda a: json.loads(a),
         })
 
-        # Set parameters in dataset coloumns for better differentiation
-        dataset["local_planner"] = params_content["local_planner"]
-        dataset["agent_name"] = params_content["agent_name"]
         dataset["model"] = params_content["model"]
         dataset["namespace"] = params_content["namespace"]
 
@@ -146,7 +143,7 @@ def read_datasets(data_paths):
 
 class ResultPlotter:
     @staticmethod
-    def countplot_for_result(dataset, differentiate="local_planner", title="Results", save_name="results", plot_args={}):
+    def countplot_for_result(dataset, differentiate="namespace", title="Results", save_name="results", plot_args={}):
         """
             Shows the results for every episode in a count plot to compare
             with different robots
@@ -217,7 +214,7 @@ class EpisodeArrayValuePlotter:
 
         plot(title, save_name)
 
-    def distplot_for_single_episode(dataset, data_key, title, save_name, episode=0, differentiate="local_planner", plot_key="swarm", plot_args={}):
+    def distplot_for_single_episode(dataset, data_key, title, save_name, episode=0, differentiate="namespace", plot_key="swarm", plot_args={}):
         """
             Create a distributional plot for a single episode
         """
@@ -324,7 +321,7 @@ class PathVisualizer:
 
         return fig, ax
 
-    def create_episode_plots_for_namespaces(self, dataset, title, save_name, episode=0, differentiate="local_planner", desired_results=[], should_add_obstacles=False, should_add_collisions=False):
+    def create_episode_plots_for_namespaces(self, dataset, title, save_name, episode=0, differentiate="namespace", desired_results=[], should_add_obstacles=False, should_add_collisions=False):
         robots_tested = list(set(dataset[differentiate].to_list()))
 
         plt.close()
@@ -368,12 +365,12 @@ class PathVisualizer:
         """
         possible_paths = dataset[dataset["result"] == "GOAL_REACHED"]
 
-        namespaces = list(set(possible_paths["local_planner"].to_list()))
+        namespaces = list(set(possible_paths["namespace"].to_list()))
 
         fig, ax = self.create_map_plot()
 
         for namespace in namespaces:
-            paths_for_namespace = possible_paths[possible_paths["local_planner"] == namespace]
+            paths_for_namespace = possible_paths[possible_paths["namespace"] == namespace]
             
             minimal_path = paths_for_namespace[paths_for_namespace["time_diff"] == paths_for_namespace["time_diff"].min()][["path", "start", "goal"]].reset_index()
 

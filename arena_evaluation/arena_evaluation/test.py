@@ -251,28 +251,17 @@ class Recorder(Node):
 
         with open(self.result_dir + "/params.yaml", "w") as file:
 
-            # Declare the parameters locally in the method
             self.declare_parameter("map_file", "")
             self.declare_parameter("scenario_file", "")
-            self.declare_parameter("inter_planner", "")
-            self.declare_parameter("local_planner", "")
-            self.declare_parameter("agent_name", "")
 
-            # Get the parameter values
             map_file = self.get_parameter("map_file").value
             scenario_file = self.get_parameter("scenario_file").value
-            inter_planner = self.get_parameter("inter_planner").value
-            local_planner = self.get_parameter("local_planner").value
-            agent_name = self.get_parameter("agent_name").value
             namespace = self.get_namespace().strip('/')
 
             yaml.dump({
                 "model": self.model,
                 "map_file": map_file,
                 "scenario_file": scenario_file,
-                "inter_planner": inter_planner,
-                "local_planner": local_planner,
-                "agent_name": agent_name,
                 "namespace": namespace
             }, file)
 
@@ -467,24 +456,15 @@ class BagRecorder(Node):
         with open(params_path, "w") as file:
             self.declare_parameter("map_file", "")
             self.declare_parameter("scenario_file", "")
-            self.declare_parameter("inter_planner", "")
-            self.declare_parameter("local_planner", "")
-            self.declare_parameter("agent_name", "")
 
             map_file = self.get_parameter("map_file").value
             scenario_file = self.get_parameter("scenario_file").value
-            inter_planner = self.get_parameter("inter_planner").value
-            local_planner = self.get_parameter("local_planner").value
-            agent_name = self.get_parameter("agent_name").value
             namespace = self.get_namespace().strip('/')
             yaml.dump({
                 "model": self.model,
                 "world": self.world,
                 "map_file": map_file,
                 "scenario_file": scenario_file,
-                "inter_planner": inter_planner,
-                "local_planner": local_planner,
-                "agent_name": agent_name,
                 "namespace": namespace
             }, file)
 

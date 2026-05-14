@@ -1,2 +1,2 @@
-local_planner: [teb, rosnav, cohan]
-inter_planner: [polite, aggressive]
+mobile.local_planner: [teb, rosnav, cohan]
+mobile.inter_planner: [polite, aggressive]

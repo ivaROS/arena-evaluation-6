@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import contextlib
 import datetime
+import logging
 import os
 import pathlib
 import re
@@ -58,13 +59,7 @@ class _HasStateSteps(typing.Protocol):
     def state(self) -> _WithSteps: ...
 
 
-_FORWARDABLE_CONTESTANT_ARGS = (
-    "local_planner",
-    "inter_planner",
-    "global_planner",
-    "navigator",
-    "agent_name",
-)
+_log = logging.getLogger(__name__)
 
 
 def build_launch_args(step: Step, simulator: str | None) -> list[str]:
@@ -72,6 +67,11 @@ def build_launch_args(step: Step, simulator: str | None) -> list[str]:
 
     Per-mode params (task.scenario.file, task.random.*, ...) are not passed here;
     the runner sets them via QueueEpisode before each RunEpisode goal.
+
+    Contestant args are forwarded verbatim, except keys that collide with
+    stage-owned launch args (sim, robot, world, tm_robots, tm_obstacles,
+    run_seed, auto_reset, tm_modules, record_data_dir), which would override
+    the stage's configuration. Those are logged and dropped.
     """
     s = step.stage
     args = [
@@ -86,10 +86,17 @@ def build_launch_args(step: Step, simulator: str | None) -> list[str]:
     ]
     if step.record_dir is not None:
         args.append(f"record_data_dir:={step.record_dir}")
-    for k in _FORWARDABLE_CONTESTANT_ARGS:
-        v = step.contestant.args.get(k)
-        if v:
-            args.append(f"{k}:={v}")
+    own_keys = {a.split(":=", 1)[0] for a in args}
+    for k, v in step.contestant.args.items():
+        if not v:
+            continue
+        if k in own_keys:
+            _log.warning(
+                "contestant %r: arg %r=%r ignored, controlled by stage",
+                step.contestant.name, k, v,
+            )
+            continue
+        args.append(f"{k}:={v}")
     return args
 
 

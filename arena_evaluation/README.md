@@ -201,7 +201,7 @@ To record data as csv file while doing evaluation runs set the flag `recorder_da
 
 ```bash
 workon rosnav
-roslaunch arena_bringup start_arena_gazebo.launch world:="aws_house" scenario_file:="aws_house_obs05.json" local_planner:="teb" model:="turtlebot3_burger" use_recorder:="true"
+arena launch sim:=gazebo world:=aws_house scenario_file:=aws_house_obs05.json mobile.local_planner:=teb robot:=turtlebot3_burger use_recorder:=true
 ```
 
 The data will be recorded in `.../catkin_ws/src/forks/arena-evaluation/01_recording`.

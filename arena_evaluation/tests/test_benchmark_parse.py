@@ -146,7 +146,7 @@ def test_stage_parse_invalid_tm_obstacles_raises():
 def test_contest_parse_list_happy_path():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = [{"name": "planner_a", "local_planner": "dwa"}]
+    obj = [{"name": "planner_a", "mobile.local_planner": "dwa"}]
     result = Contest.parse("my_contest", obj)
 
     assert isinstance(result, Contest)
@@ -154,15 +154,15 @@ def test_contest_parse_list_happy_path():
     assert len(result.contestants) == 1
     c = result.contestants[0]
     assert c.name == "planner_a"
-    assert c.args["local_planner"] == "dwa"
+    assert c.args["mobile.local_planner"] == "dwa"
 
 
 def test_contest_parse_list_multiple_contestants():
     from arena_evaluation.benchmark.config import Contest
 
     obj = [
-        {"name": "p1", "local_planner": "dwa"},
-        {"name": "p2", "local_planner": "teb"},
+        {"name": "p1", "mobile.local_planner": "dwa"},
+        {"name": "p2", "mobile.local_planner": "teb"},
     ]
     result = Contest.parse("c", obj)
 
@@ -174,7 +174,7 @@ def test_contest_parse_list_multiple_contestants():
 def test_contest_parse_list_description_is_none():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = [{"name": "p1", "local_planner": "dwa"}]
+    obj = [{"name": "p1", "mobile.local_planner": "dwa"}]
     result = Contest.parse("c", obj)
 
     assert result.description is None
@@ -183,7 +183,7 @@ def test_contest_parse_list_description_is_none():
 def test_contest_parse_list_missing_name_raises():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = [{"local_planner": "dwa"}]
+    obj = [{"mobile.local_planner": "dwa"}]
     with pytest.raises(ValueError, match="requires 'name'"):
         Contest.parse("c", obj)
 
@@ -192,8 +192,8 @@ def test_contest_parse_list_duplicate_names_raises():
     from arena_evaluation.benchmark.config import Contest
 
     obj = [
-        {"name": "same", "local_planner": "dwa"},
-        {"name": "same", "local_planner": "teb"},
+        {"name": "same", "mobile.local_planner": "dwa"},
+        {"name": "same", "mobile.local_planner": "teb"},
     ]
     with pytest.raises(ValueError, match="duplicate contestant name"):
         Contest.parse("c", obj)
@@ -202,11 +202,11 @@ def test_contest_parse_list_duplicate_names_raises():
 def test_contest_parse_list_all_keys_except_name_go_to_args():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = [{"name": "p", "local_planner": "teb", "inter_planner": "foo", "agent_name": "bar"}]
+    obj = [{"name": "p", "mobile.local_planner": "teb", "mobile.inter_planner": "foo", "mobile.agent": "bar"}]
     result = Contest.parse("c", obj)
 
     c = result.contestants[0]
-    assert c.args == {"local_planner": "teb", "inter_planner": "foo", "agent_name": "bar"}
+    assert c.args == {"mobile.local_planner": "teb", "mobile.inter_planner": "foo", "mobile.agent": "bar"}
 
 
 # ---------------------------------------------------------------------------
@@ -216,22 +216,22 @@ def test_contest_parse_list_all_keys_except_name_go_to_args():
 def test_contest_parse_sweep_one_axis():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = {"local_planner": ["dwa", "teb"], "inter_planner": "foo"}
+    obj = {"mobile.local_planner": ["dwa", "teb"], "mobile.inter_planner": "foo"}
     result = Contest.parse("c", obj)
 
     assert len(result.contestants) == 2
     names = [c.name for c in result.contestants]
     assert names == ["dwa", "teb"]
-    assert result.contestants[0].args["local_planner"] == "dwa"
-    assert result.contestants[0].args["inter_planner"] == "foo"
-    assert result.contestants[1].args["local_planner"] == "teb"
-    assert result.contestants[1].args["inter_planner"] == "foo"
+    assert result.contestants[0].args["mobile.local_planner"] == "dwa"
+    assert result.contestants[0].args["mobile.inter_planner"] == "foo"
+    assert result.contestants[1].args["mobile.local_planner"] == "teb"
+    assert result.contestants[1].args["mobile.inter_planner"] == "foo"
 
 
 def test_contest_parse_sweep_two_axes():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = {"local_planner": ["dwa", "teb"], "global_planner": ["navfn", "smac"]}
+    obj = {"mobile.local_planner": ["dwa", "teb"], "mobile.global_planner": ["navfn", "smac"]}
     result = Contest.parse("c", obj)
 
     assert len(result.contestants) == 4
@@ -242,7 +242,7 @@ def test_contest_parse_sweep_two_axes():
 def test_contest_parse_sweep_prefix():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = {"name": "foo", "local_planner": ["dwa", "teb"]}
+    obj = {"name": "foo", "mobile.local_planner": ["dwa", "teb"]}
     result = Contest.parse("c", obj)
 
     names = [c.name for c in result.contestants]
@@ -252,7 +252,7 @@ def test_contest_parse_sweep_prefix():
 def test_contest_parse_sweep_description_stored_not_in_args():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = {"description": "my desc", "local_planner": ["dwa", "teb"]}
+    obj = {"description": "my desc", "mobile.local_planner": ["dwa", "teb"]}
     result = Contest.parse("c", obj)
 
     assert result.description == "my desc"
@@ -263,7 +263,7 @@ def test_contest_parse_sweep_description_stored_not_in_args():
 def test_contest_parse_sweep_name_not_in_args():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = {"name": "prefix", "local_planner": ["dwa", "teb"]}
+    obj = {"name": "prefix", "mobile.local_planner": ["dwa", "teb"]}
     result = Contest.parse("c", obj)
 
     for c in result.contestants:
@@ -273,18 +273,18 @@ def test_contest_parse_sweep_name_not_in_args():
 def test_contest_parse_sweep_no_axes_single_contestant():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = {"local_planner": "dwa", "inter_planner": "foo"}
+    obj = {"mobile.local_planner": "dwa", "mobile.inter_planner": "foo"}
     result = Contest.parse("c", obj)
 
     assert len(result.contestants) == 1
     assert result.contestants[0].name == "single"
-    assert result.contestants[0].args["local_planner"] == "dwa"
+    assert result.contestants[0].args["mobile.local_planner"] == "dwa"
 
 
 def test_contest_parse_sweep_duplicate_names_raises():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = {"local_planner": ["dwa", "dwa"]}
+    obj = {"mobile.local_planner": ["dwa", "dwa"]}
     with pytest.raises(ValueError, match="duplicate contestant name"):
         Contest.parse("c", obj)
 
@@ -292,11 +292,11 @@ def test_contest_parse_sweep_duplicate_names_raises():
 def test_contest_parse_sweep_constants_in_all_args():
     from arena_evaluation.benchmark.config import Contest
 
-    obj = {"local_planner": ["dwa", "teb"], "inter_planner": "bypass"}
+    obj = {"mobile.local_planner": ["dwa", "teb"], "mobile.inter_planner": "bypass"}
     result = Contest.parse("c", obj)
 
     for c in result.contestants:
-        assert c.args["inter_planner"] == "bypass"
+        assert c.args["mobile.inter_planner"] == "bypass"
 
 
 def test_contest_parse_invalid_type_raises():

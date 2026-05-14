@@ -1,3 +1,3 @@
 - name: dwb
-  local_planner: dwb
-  inter_planner: navigate_w_replanning_time
+  mobile.local_planner: dwb
+  mobile.inter_planner: navigate_w_replanning_time
