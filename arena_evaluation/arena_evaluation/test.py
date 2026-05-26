@@ -420,16 +420,17 @@ class BagRecorder(Node):
         self.writer.open(storage_options, converter_options)
         # Create topic metadata for each topic that will be recorded.
         self.topics_metadata = {}
-        for topic in topics_to_sub:
+        for i, topic in enumerate(topics_to_sub):
             topic_name = topic[0]
             msg_type = topic[2]
             # Construct the type string. This follows the convention "package/msg/MessageType"
             type_str = f"{msg_type.__module__.replace('.', '/')}/{msg_type.__name__}"
             metadata = TopicMetadata(
+                id=i,
                 name=topic_name,
                 type=type_str,
                 serialization_format='cdr',
-                offered_qos_profiles=''
+                offered_qos_profiles=[]
             )
             self.writer.create_topic(metadata)
             self.topics_metadata[topic_name] = metadata
