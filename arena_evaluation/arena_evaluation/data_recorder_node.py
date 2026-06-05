@@ -350,7 +350,11 @@ class BagRecorder(Node):
         self.world = self.get_parameter("world").value
 
         self.base_dir = get_package_share_directory("arena_evaluation")
-        self.result_dir = os.path.join(self.base_dir, "data", self.result_dir)
+        # Benchmarking passes an absolute record_data_dir under the run folder.
+        # Keep that path intact; only legacy relative/auto:/ paths belong under
+        # the package-local data directory.
+        if not os.path.isabs(self.result_dir):
+            self.result_dir = os.path.join(self.base_dir, "data", self.result_dir)
         os.makedirs(self.result_dir, exist_ok=True)
 
         self.write_params()

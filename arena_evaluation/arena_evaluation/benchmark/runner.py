@@ -149,7 +149,10 @@ def build_pending(
 
 def env_key(step: Step, simulator: str | None) -> tuple:
     """Steps with the same env_key reuse one env. Contestants always force a new env."""
-    return (step.contestant.name, step.stage.robot, simulator)
+    # The recorder opens its rosbag when the env is spawned. Include the
+    # per-step record directory in the key so each documented
+    # <contestant>/<stage>/recording path gets its own writer.
+    return (step.contestant.name, step.stage.robot, simulator, step.record_dir)
 
 
 def group_pending(pending: list[Step], simulator: str | None) -> list[list[Step]]:
