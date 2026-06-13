@@ -12,6 +12,7 @@ import types
 import pytest
 from arena_evaluation.benchmark.config import Contest, Suite, _parse_duration
 from arena_evaluation.benchmark.runner import (
+    CollisionAccumulator,
     _default_run_id,
     build_launch_args,
     build_pending,
@@ -195,6 +196,7 @@ _EXPECTED_HEADERS = [
     "ts_iso", "run_id", "step_key", "contestant", "stage", "env_id", "episode_id",
     "world", "seed", "tm_robots", "tm_obstacles", "tm_modules", "robots",
     "outcome_state", "outcome_info", "started_at", "ended_at", "runtime_s",
+    "collision_count", "collision_events_json",
     "robots_params_json", "obstacles_params_json",
     "error_kind", "error_detail",
 ]
@@ -215,7 +217,7 @@ def test_progress_log_header_column_count(tmp_path: pathlib.Path):
     with (tmp_path / "progress.csv").open(newline="") as fh:
         reader = csv.reader(fh)
         headers = next(reader)
-    assert len(headers) == 22
+    assert len(headers) == 24
 
 
 def test_progress_log_append(tmp_path: pathlib.Path):
@@ -245,6 +247,21 @@ def test_progress_log_append(tmp_path: pathlib.Path):
         episode_record=rec1,
         started_at=t0,
         ended_at=t0 + 5.0,
+        collision_count=2,
+        collision_events=[
+            {
+                "robot_ns": "/env_0/jackal",
+                "source": "collision_events",
+                "polygon_name": "footprint",
+                "obstacle_id": "<wall>",
+            },
+            {
+                "robot_ns": "/env_0/jackal",
+                "source": "collision_events",
+                "polygon_name": "footprint",
+                "obstacle_id": "shelf1",
+            },
+        ],
     )
     log.append(
         ts_iso=ts,
@@ -282,6 +299,21 @@ def test_progress_log_append(tmp_path: pathlib.Path):
     assert r0["robots"] == "burger"
     assert r0["outcome_state"] == "1"
     assert r0["outcome_info"] == ""
+    assert r0["collision_count"] == "2"
+    assert json.loads(r0["collision_events_json"]) == [
+        {
+            "robot_ns": "/env_0/jackal",
+            "source": "collision_events",
+            "polygon_name": "footprint",
+            "obstacle_id": "<wall>",
+        },
+        {
+            "robot_ns": "/env_0/jackal",
+            "source": "collision_events",
+            "polygon_name": "footprint",
+            "obstacle_id": "shelf1",
+        },
+    ]
     assert json.loads(r0["robots_params_json"]) == []
     assert json.loads(r0["obstacles_params_json"]) == []
     assert r0["error_kind"] == ""
@@ -291,6 +323,8 @@ def test_progress_log_append(tmp_path: pathlib.Path):
     assert r1["episode_id"] == "2"
     assert r1["outcome_state"] == "2"
     assert r1["outcome_info"] == "collision"
+    assert r1["collision_count"] == "0"
+    assert json.loads(r1["collision_events_json"]) == []
     assert r1["error_kind"] == "episode_timeout"
     assert r1["error_detail"] == "stage.timeout exceeded"
 
@@ -318,6 +352,91 @@ def test_progress_log_append_to_existing(tmp_path: pathlib.Path):
         reader = csv.DictReader(fh)
         rows = list(reader)
     assert len(rows) == 2
+
+
+# ---------------------------------------------------------------------------
+# CollisionAccumulator
+# ---------------------------------------------------------------------------
+
+def _collision_events(*pairs: tuple[str, str]) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        events=[
+            types.SimpleNamespace(polygon_name=polygon, obstacle_id=obstacle)
+            for polygon, obstacle in pairs
+        ]
+    )
+
+
+def _collision_state(polygon_name: str = "", action_type: int = 0) -> types.SimpleNamespace:
+    return types.SimpleNamespace(polygon_name=polygon_name, action_type=action_type)
+
+
+def test_collision_accumulator_counts_new_contacts_once():
+    acc = CollisionAccumulator()
+
+    acc.on_events("/env_0/jackal", _collision_events(("footprint", "<wall>")))
+    assert acc.end() == (0, [])
+
+    acc.begin()
+    acc.on_events("/env_0/jackal", _collision_events(("footprint", "<wall>")))
+    acc.on_events("/env_0/jackal", _collision_events(("footprint", "<wall>")))
+    acc.on_events(
+        "/env_0/jackal",
+        _collision_events(("footprint", "<wall>"), ("footprint", "shelf1")),
+    )
+    acc.on_events("/env_0/jackal", _collision_events())
+    acc.on_events("/env_0/jackal", _collision_events(("footprint", "<wall>")))
+
+    count, events = acc.end()
+    assert count == 3
+    assert events == [
+        {
+            "robot_ns": "/env_0/jackal",
+            "source": "collision_events",
+            "polygon_name": "footprint",
+            "obstacle_id": "<wall>",
+        },
+        {
+            "robot_ns": "/env_0/jackal",
+            "source": "collision_events",
+            "polygon_name": "footprint",
+            "obstacle_id": "shelf1",
+        },
+        {
+            "robot_ns": "/env_0/jackal",
+            "source": "collision_events",
+            "polygon_name": "footprint",
+            "obstacle_id": "<wall>",
+        },
+    ]
+
+
+def test_collision_accumulator_uses_state_until_events_exist():
+    acc = CollisionAccumulator()
+
+    acc.begin()
+    acc.on_state("/env_0/jackal", _collision_state("footprint", 1))
+    acc.on_state("/env_0/jackal", _collision_state("footprint", 1))
+    count, events = acc.end()
+    assert count == 1
+    assert events == [{
+        "robot_ns": "/env_0/jackal",
+        "source": "collision_monitor_state",
+        "polygon_name": "footprint",
+        "obstacle_id": "<collision_monitor_state>",
+    }]
+
+    acc.begin()
+    acc.on_state("/env_0/jackal", _collision_state("footprint", 1))
+    acc.on_events("/env_0/jackal", _collision_events(("footprint", "<wall>")))
+    count, events = acc.end()
+    assert count == 1
+    assert events == [{
+        "robot_ns": "/env_0/jackal",
+        "source": "collision_events",
+        "polygon_name": "footprint",
+        "obstacle_id": "<wall>",
+    }]
 
 
 # ---------------------------------------------------------------------------
@@ -1030,5 +1149,3 @@ def test_flatten_typed_values():
     assert by_name["a_bool"].value.bool_value is True
     assert by_name["a_float"].value.type == ParameterType.PARAMETER_DOUBLE
     assert by_name["a_float"].value.double_value == pytest.approx(3.14)
-
-

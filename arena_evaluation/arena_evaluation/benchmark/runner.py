@@ -17,6 +17,8 @@ import typing
 _T = typing.TypeVar("_T")
 
 import attrs
+from arena_robots_msgs.msg import CollisionEvents
+from nav2_msgs.msg import CollisionMonitorState
 import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
@@ -28,7 +30,7 @@ from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from task_generator.constants import Constants
 from task_generator_msgs.action import RunEpisode
-from task_generator_msgs.msg import EpisodeRecord
+from task_generator_msgs.msg import EpisodeRecord, RobotFleet
 from task_generator_msgs.srv import QueueEpisode
 
 STATE_TOPIC = "/arena/benchmark/state"
@@ -254,6 +256,80 @@ class _EnvDied(Exception):
     """Raised when an env disappears from /arena/state/envs while the runner was waiting on it."""
 
 
+class CollisionAccumulator:
+    """Counts new collision contacts while one benchmark episode is active."""
+
+    _EVENT_SOURCE = "collision_events"
+    _STATE_SOURCE = "collision_monitor_state"
+    _STOP_ACTION = 1
+
+    def __init__(self) -> None:
+        self._active = False
+        self._current_by_robot_source: dict[tuple[str, str], set[tuple[str, str]]] = {}
+        self._robots_with_events: set[str] = set()
+        self._events: list[dict[str, object]] = []
+
+    def begin(self) -> None:
+        self._active = True
+        self._current_by_robot_source.clear()
+        self._robots_with_events.clear()
+        self._events = []
+
+    def end(self) -> tuple[int, list[dict[str, object]]]:
+        self._active = False
+        self._current_by_robot_source.clear()
+        self._robots_with_events.clear()
+        return len(self._events), list(self._events)
+
+    def on_events(self, robot_ns: str, msg: CollisionEvents) -> None:
+        if not self._active:
+            return
+        if robot_ns not in self._robots_with_events:
+            self._drop_state_fallback(robot_ns)
+            self._robots_with_events.add(robot_ns)
+        current: set[tuple[str, str]] = {
+            (event.polygon_name, event.obstacle_id)
+            for event in msg.events
+            if event.polygon_name or event.obstacle_id
+        }
+        self._record_current(robot_ns, self._EVENT_SOURCE, current)
+
+    def on_state(self, robot_ns: str, msg: CollisionMonitorState) -> None:
+        if not self._active or robot_ns in self._robots_with_events:
+            return
+        current = {
+            (msg.polygon_name, "<collision_monitor_state>")
+        } if msg.polygon_name and msg.action_type == self._STOP_ACTION else set()
+        self._record_current(robot_ns, self._STATE_SOURCE, current)
+
+    def _record_current(
+        self,
+        robot_ns: str,
+        source: str,
+        current: set[tuple[str, str]],
+    ) -> None:
+        key = (robot_ns, source)
+        previous = self._current_by_robot_source.get(key, set())
+        for polygon_name, obstacle_id in sorted(current - previous):
+            self._events.append({
+                "robot_ns": robot_ns,
+                "source": source,
+                "polygon_name": polygon_name,
+                "obstacle_id": obstacle_id,
+            })
+        self._current_by_robot_source[key] = current
+
+    def _drop_state_fallback(self, robot_ns: str) -> None:
+        self._current_by_robot_source.pop((robot_ns, self._STATE_SOURCE), None)
+        self._events = [
+            event for event in self._events
+            if not (
+                event.get("robot_ns") == robot_ns
+                and event.get("source") == self._STATE_SOURCE
+            )
+        ]
+
+
 class BenchmarkRunner(ArenaMixinNode):
     exit_code: typing.ClassVar[int] = 0
 
@@ -296,6 +372,8 @@ class BenchmarkRunner(ArenaMixinNode):
         self._episode_action_clients: dict[int, ActionClientWrapper] = {}
         self._queue_clients: dict[int, ClientWrapper] = {}
         self._episode_records: dict[int, dict[int, EpisodeRecord]] = {}
+        self._collision_accumulators: dict[int, CollisionAccumulator] = {}
+        self._collision_robot_topics: dict[int, set[str]] = {}
         self._env_subs: dict[int, list] = {}
 
         self.create_subscription(EnvRegistry, "/arena/state/envs", self._on_envs, _LATCHED)
@@ -384,6 +462,8 @@ class BenchmarkRunner(ArenaMixinNode):
             RunEpisode, action_name
         )
         self._episode_records[env_id] = {}
+        self._collision_accumulators[env_id] = CollisionAccumulator()
+        self._collision_robot_topics[env_id] = set()
 
         queue_client = self.create_client_wrapper(
             QueueEpisode, f"{env_ns_root}/config/queue_episode"
@@ -404,6 +484,56 @@ class BenchmarkRunner(ArenaMixinNode):
         )
         self._env_subs[env_id] = [sub_ep]
 
+        def _on_robot_fleet(msg: RobotFleet) -> None:
+            topics = self._collision_robot_topics.get(env_id)
+            if topics is None:
+                return
+            for robot in msg.robots:
+                robot_ns = robot.ns.rstrip("/")
+                if not robot_ns:
+                    continue
+                topic = f"{robot_ns}/collision_events"
+                if topic in topics:
+                    continue
+                topics.add(topic)
+
+                def _on_collision_events(
+                    events_msg: CollisionEvents,
+                    *,
+                    _env_id: int = env_id,
+                    _robot_ns: str = robot_ns,
+                ) -> None:
+                    acc = self._collision_accumulators.get(_env_id)
+                    if acc is not None:
+                        acc.on_events(_robot_ns, events_msg)
+
+                self._env_subs.setdefault(env_id, []).append(
+                    self.create_subscription(CollisionEvents, topic, _on_collision_events, 10)
+                )
+                state_topic = f"{robot_ns}/collision_monitor_state"
+
+                def _on_collision_state(
+                    state_msg: CollisionMonitorState,
+                    *,
+                    _env_id: int = env_id,
+                    _robot_ns: str = robot_ns,
+                ) -> None:
+                    acc = self._collision_accumulators.get(_env_id)
+                    if acc is not None:
+                        acc.on_state(_robot_ns, state_msg)
+
+                self._env_subs.setdefault(env_id, []).append(
+                    self.create_subscription(CollisionMonitorState, state_topic, _on_collision_state, 10)
+                )
+
+        sub_robots = self.create_subscription(
+            RobotFleet,
+            f"{env_ns_root}/state/robots",
+            _on_robot_fleet,
+            _LATCHED,
+        )
+        self._env_subs[env_id].append(sub_robots)
+
     def _teardown_env_clients(self, env_id: int) -> None:
         """Destroy per-env subscriptions, action client, and queue_episode client."""
         for sub in self._env_subs.pop(env_id, []):
@@ -415,6 +545,8 @@ class BenchmarkRunner(ArenaMixinNode):
         if qc is not None:
             qc.client.destroy()
         self._episode_records.pop(env_id, None)
+        self._collision_accumulators.pop(env_id, None)
+        self._collision_robot_topics.pop(env_id, None)
         self._env_visible_events.pop(env_id, None)
 
     async def _push_stage_config(self, env_id: int, step: Step) -> None:
@@ -457,6 +589,9 @@ class BenchmarkRunner(ArenaMixinNode):
 
                 ep_started_sim = self.sim_time.to_seconds()
                 ep_started_wall = time.time()
+                collision_acc = self._collision_accumulators.get(env_id)
+                if collision_acc is not None:
+                    collision_acc.begin()
 
                 goal_handle = await self._await_or_env_died(
                     env_id, ac.send_goal(goal)
@@ -468,6 +603,8 @@ class BenchmarkRunner(ArenaMixinNode):
                         timeout=step.stage.timeout,
                     )
                 except TimeoutError:
+                    if collision_acc is not None:
+                        collision_acc.end()
                     episodes_failed += 1
                     self.get_logger().warning(
                         f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
@@ -478,6 +615,9 @@ class BenchmarkRunner(ArenaMixinNode):
                     continue
                 ep_ended_sim = self.sim_time.to_seconds()
                 ep_ended_wall = time.time()
+                collision_count, collision_events = (
+                    collision_acc.end() if collision_acc is not None else (0, [])
+                )
 
                 result: RunEpisode.Result = result_obj.result
                 episode_id = result.episode_id
@@ -516,6 +656,7 @@ class BenchmarkRunner(ArenaMixinNode):
                 self.get_logger().info(
                     f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
                     f"{state_label} info={rec.outcome_info!r} "
+                    f"collisions={collision_count} "
                     f"sim={ep_ended_sim - ep_started_sim:.1f}s "
                     f"wall={ep_ended_wall - ep_started_wall:.1f}s"
                 )
@@ -532,6 +673,8 @@ class BenchmarkRunner(ArenaMixinNode):
                     episode_record=rec,
                     started_at=ep_started_sim,
                     ended_at=ep_ended_sim,
+                    collision_count=collision_count,
+                    collision_events=collision_events,
                 )
         except _EnvDied as exc:
             self.get_logger().warning(

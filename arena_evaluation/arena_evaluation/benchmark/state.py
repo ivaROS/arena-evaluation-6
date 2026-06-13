@@ -168,6 +168,7 @@ class ProgressLog:
         "ts_iso,run_id,step_key,contestant,stage,env_id,episode_id,"
         "world,seed,tm_robots,tm_obstacles,tm_modules,robots,"
         "outcome_state,outcome_info,started_at,ended_at,runtime_s,"
+        "collision_count,collision_events_json,"
         "robots_params_json,obstacles_params_json,"
         "error_kind,error_detail"
     )
@@ -194,6 +195,8 @@ class ProgressLog:
         episode_record: object,
         started_at: float,
         ended_at: float,
+        collision_count: int = 0,
+        collision_events: list[dict] | None = None,
         error_kind: StepErrorKind | None = None,
         error_detail: str | None = None,
     ) -> None:
@@ -218,6 +221,8 @@ class ProgressLog:
             started_at,
             ended_at,
             runtime,
+            collision_count,
+            json.dumps(collision_events or []),
             _params_to_json(rec.robots_params),
             _params_to_json(rec.obstacles_params),
             error_kind.value if error_kind is not None else "",

@@ -16,7 +16,9 @@
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>arena_robots_msgs</depend>
   <depend>arena_evaluation_msgs</depend>
   <depend>hunav_msgs</depend>
 
