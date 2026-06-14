@@ -1,0 +1,33 @@
+stages:
+  - name: wall_contact
+    map: map_empty
+    robot: jackal
+    tm_robots: scenario
+    tm_obstacles: scenario
+    episodes: 1
+    timeout: 45s
+    config:
+      scenario:
+        file: collision_wall
+
+  - name: pedestrian_contact
+    map: map_empty
+    robot: jackal
+    tm_robots: scenario
+    tm_obstacles: scenario
+    episodes: 1
+    timeout: 45s
+    config:
+      scenario:
+        file: collision_pedestrian
+
+  - name: robot_contact
+    map: map_empty
+    robot: jackal,jackal
+    tm_robots: scenario
+    tm_obstacles: scenario
+    episodes: 1
+    timeout: 45s
+    config:
+      scenario:
+        file: collision_robot

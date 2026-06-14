@@ -1,0 +1,5 @@
+- name: collision-benchmark
+  mobile: collision-benchmark
+  mobile.duration_s: 20.0
+  mobile.linear_x: 1.0
+  mobile.rate_hz: 10.0

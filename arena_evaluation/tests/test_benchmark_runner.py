@@ -250,12 +250,16 @@ def test_progress_log_append(tmp_path: pathlib.Path):
         collision_count=2,
         collision_events=[
             {
+                "robot_name": "jackal",
+                "robot_namespace": "/env_0/jackal",
                 "robot_ns": "/env_0/jackal",
                 "source": "collision_events",
                 "polygon_name": "footprint",
                 "obstacle_id": "<wall>",
             },
             {
+                "robot_name": "jackal",
+                "robot_namespace": "/env_0/jackal",
                 "robot_ns": "/env_0/jackal",
                 "source": "collision_events",
                 "polygon_name": "footprint",
@@ -302,12 +306,16 @@ def test_progress_log_append(tmp_path: pathlib.Path):
     assert r0["collision_count"] == "2"
     assert json.loads(r0["collision_events_json"]) == [
         {
+            "robot_name": "jackal",
+            "robot_namespace": "/env_0/jackal",
             "robot_ns": "/env_0/jackal",
             "source": "collision_events",
             "polygon_name": "footprint",
             "obstacle_id": "<wall>",
         },
         {
+            "robot_name": "jackal",
+            "robot_namespace": "/env_0/jackal",
             "robot_ns": "/env_0/jackal",
             "source": "collision_events",
             "polygon_name": "footprint",
@@ -391,21 +399,30 @@ def test_collision_accumulator_counts_new_contacts_once():
     assert count == 3
     assert events == [
         {
+            "robot_name": "jackal",
+            "robot_namespace": "/env_0/jackal",
             "robot_ns": "/env_0/jackal",
             "source": "collision_events",
             "polygon_name": "footprint",
+            "polygon_names": ["footprint"],
             "obstacle_id": "<wall>",
         },
         {
+            "robot_name": "jackal",
+            "robot_namespace": "/env_0/jackal",
             "robot_ns": "/env_0/jackal",
             "source": "collision_events",
             "polygon_name": "footprint",
+            "polygon_names": ["footprint"],
             "obstacle_id": "shelf1",
         },
         {
+            "robot_name": "jackal",
+            "robot_namespace": "/env_0/jackal",
             "robot_ns": "/env_0/jackal",
             "source": "collision_events",
             "polygon_name": "footprint",
+            "polygon_names": ["footprint"],
             "obstacle_id": "<wall>",
         },
     ]
@@ -420,9 +437,12 @@ def test_collision_accumulator_uses_state_until_events_exist():
     count, events = acc.end()
     assert count == 1
     assert events == [{
+        "robot_name": "jackal",
+        "robot_namespace": "/env_0/jackal",
         "robot_ns": "/env_0/jackal",
         "source": "collision_monitor_state",
         "polygon_name": "footprint",
+        "polygon_names": ["footprint"],
         "obstacle_id": "<collision_monitor_state>",
     }]
 
@@ -432,9 +452,92 @@ def test_collision_accumulator_uses_state_until_events_exist():
     count, events = acc.end()
     assert count == 1
     assert events == [{
+        "robot_name": "jackal",
+        "robot_namespace": "/env_0/jackal",
         "robot_ns": "/env_0/jackal",
         "source": "collision_events",
         "polygon_name": "footprint",
+        "polygon_names": ["footprint"],
+        "obstacle_id": "<wall>",
+    }]
+
+
+def test_collision_accumulator_dedupes_reciprocal_robot_contacts():
+    acc = CollisionAccumulator()
+
+    acc.begin()
+    acc.on_events("/env_0/jackal_0", _collision_events(("StopPolygon", "<robot:jackal_1>")))
+    acc.on_events("/env_0/jackal_1", _collision_events(("StopPolygon", "<robot:jackal_0>")))
+    count, events = acc.end()
+    assert count == 1
+    assert events == [{
+        "robot_name": "jackal_0",
+        "robot_namespace": "/env_0/jackal_0",
+        "robot_ns": "/env_0/jackal_0",
+        "source": "collision_events",
+        "polygon_name": "StopPolygon",
+        "polygon_names": ["StopPolygon"],
+        "obstacle_id": "<robot_pair:jackal_0,jackal_1>",
+    }]
+
+    acc.begin()
+    acc.on_events("/env_0/jackal_0", _collision_events(("StopPolygon", "<robot:jackal_1>")))
+    acc.on_events("/env_0/jackal_0", _collision_events())
+    acc.on_events("/env_0/jackal_0", _collision_events(("StopPolygon", "<robot:jackal_1>")))
+    count, _events = acc.end()
+    assert count == 2
+
+
+def test_collision_accumulator_counts_same_obstacle_per_robot():
+    acc = CollisionAccumulator()
+
+    acc.begin()
+    acc.on_events("/env_0/jackal_0", _collision_events(("StopPolygon", "<wall>")))
+    acc.on_events("/env_0/jackal_1", _collision_events(("StopPolygon", "<wall>")))
+    count, events = acc.end()
+
+    assert count == 2
+    assert events == [
+        {
+            "robot_name": "jackal_0",
+            "robot_namespace": "/env_0/jackal_0",
+            "robot_ns": "/env_0/jackal_0",
+            "source": "collision_events",
+            "polygon_name": "StopPolygon",
+            "polygon_names": ["StopPolygon"],
+            "obstacle_id": "<wall>",
+        },
+        {
+            "robot_name": "jackal_1",
+            "robot_namespace": "/env_0/jackal_1",
+            "robot_ns": "/env_0/jackal_1",
+            "source": "collision_events",
+            "polygon_name": "StopPolygon",
+            "polygon_names": ["StopPolygon"],
+            "obstacle_id": "<wall>",
+        },
+    ]
+
+
+def test_collision_accumulator_merges_polygons_for_one_incident():
+    acc = CollisionAccumulator()
+
+    acc.begin()
+    acc.on_events("/env_0/jackal", _collision_events(("SlowPolygon", "<wall>")))
+    acc.on_events(
+        "/env_0/jackal",
+        _collision_events(("SlowPolygon", "<wall>"), ("StopPolygon", "<wall>")),
+    )
+    count, events = acc.end()
+
+    assert count == 1
+    assert events == [{
+        "robot_name": "jackal",
+        "robot_namespace": "/env_0/jackal",
+        "robot_ns": "/env_0/jackal",
+        "source": "collision_events",
+        "polygon_name": "SlowPolygon",
+        "polygon_names": ["SlowPolygon", "StopPolygon"],
         "obstacle_id": "<wall>",
     }]
 
@@ -1045,14 +1148,14 @@ def test_env_key_components():
     from arena_evaluation.benchmark.runner import env_key
     step = _make_step_for("planner_a", "indoor", robot="jackal")
     key = env_key(step, "gazebo")
-    assert key == ("planner_a", "jackal", "gazebo")
+    assert key == ("planner_a", "jackal", "gazebo", None)
 
 
 def test_env_key_simulator_none():
     from arena_evaluation.benchmark.runner import env_key
     step = _make_step_for("planner_a", "indoor", robot="jackal")
     key = env_key(step, None)
-    assert key == ("planner_a", "jackal", None)
+    assert key == ("planner_a", "jackal", None, None)
 
 
 # ---------------------------------------------------------------------------

@@ -266,33 +266,62 @@ class CollisionAccumulator:
     def __init__(self) -> None:
         self._active = False
         self._current_by_robot_source: dict[tuple[str, str], set[tuple[str, str]]] = {}
+        self._event_contacts_by_robot: dict[str, dict[tuple[str, str], set[str]]] = {}
+        self._active_event_by_incident: dict[tuple[str, str], int] = {}
         self._robots_with_events: set[str] = set()
         self._events: list[dict[str, object]] = []
 
     def begin(self) -> None:
         self._active = True
         self._current_by_robot_source.clear()
+        self._event_contacts_by_robot.clear()
+        self._active_event_by_incident.clear()
         self._robots_with_events.clear()
         self._events = []
 
     def end(self) -> tuple[int, list[dict[str, object]]]:
         self._active = False
         self._current_by_robot_source.clear()
+        self._event_contacts_by_robot.clear()
+        self._active_event_by_incident.clear()
         self._robots_with_events.clear()
         return len(self._events), list(self._events)
 
     def on_events(self, robot_ns: str, msg: CollisionEvents) -> None:
         if not self._active:
             return
+        robot_name = self._robot_name(robot_ns)
         if robot_ns not in self._robots_with_events:
             self._drop_state_fallback(robot_ns)
             self._robots_with_events.add(robot_ns)
-        current: set[tuple[str, str]] = {
-            (event.polygon_name, event.obstacle_id)
-            for event in msg.events
-            if event.polygon_name or event.obstacle_id
-        }
-        self._record_current(robot_ns, self._EVENT_SOURCE, current)
+        previous_global = self._global_event_contacts()
+        current: dict[tuple[str, str], set[str]] = {}
+        current_robot_ns_by_incident: dict[tuple[str, str], str] = {}
+        for event in msg.events:
+            if not event.polygon_name and not event.obstacle_id:
+                continue
+            obstacle_id = self._canonical_obstacle_id(robot_name, event.obstacle_id)
+            incident = (self._collision_owner(robot_name, event.obstacle_id), obstacle_id)
+            current.setdefault(incident, set()).add(event.polygon_name)
+            current_robot_ns_by_incident[incident] = robot_ns
+        self._event_contacts_by_robot[robot_ns] = current
+        current_global = self._global_event_contacts()
+        for incident in sorted(set(previous_global) - set(current_global)):
+            self._active_event_by_incident.pop(incident, None)
+        for incident, polygon_names in sorted(current_global.items()):
+            event_index = self._active_event_by_incident.get(incident)
+            if event_index is None:
+                _owner, obstacle_id = incident
+                self._events.append(self._event_dict(
+                    current_robot_ns_by_incident.get(incident, robot_ns),
+                    self._EVENT_SOURCE,
+                    polygon_names,
+                    obstacle_id,
+                ))
+                self._active_event_by_incident[incident] = len(self._events) - 1
+            else:
+                self._events[event_index]["polygon_names"] = sorted(polygon_names)
+                self._events[event_index]["polygon_name"] = sorted(polygon_names)[0] if polygon_names else ""
 
     def on_state(self, robot_ns: str, msg: CollisionMonitorState) -> None:
         if not self._active or robot_ns in self._robots_with_events:
@@ -311,12 +340,7 @@ class CollisionAccumulator:
         key = (robot_ns, source)
         previous = self._current_by_robot_source.get(key, set())
         for polygon_name, obstacle_id in sorted(current - previous):
-            self._events.append({
-                "robot_ns": robot_ns,
-                "source": source,
-                "polygon_name": polygon_name,
-                "obstacle_id": obstacle_id,
-            })
+            self._events.append(self._event_dict(robot_ns, source, {polygon_name}, obstacle_id))
         self._current_by_robot_source[key] = current
 
     def _drop_state_fallback(self, robot_ns: str) -> None:
@@ -328,6 +352,52 @@ class CollisionAccumulator:
                 and event.get("source") == self._STATE_SOURCE
             )
         ]
+
+    @staticmethod
+    def _event_dict(
+        robot_ns: str,
+        source: str,
+        polygon_names: set[str],
+        obstacle_id: str,
+    ) -> dict[str, object]:
+        robot_name = CollisionAccumulator._robot_name(robot_ns)
+        sorted_polygon_names = sorted(polygon_names)
+        return {
+            "robot_name": robot_name,
+            "robot_namespace": robot_ns,
+            "robot_ns": robot_ns,
+            "source": source,
+            "polygon_name": sorted_polygon_names[0] if sorted_polygon_names else "",
+            "polygon_names": sorted_polygon_names,
+            "obstacle_id": obstacle_id,
+        }
+
+    def _global_event_contacts(self) -> dict[tuple[str, str], set[str]]:
+        contacts: dict[tuple[str, str], set[str]] = {}
+        for robot_contacts in self._event_contacts_by_robot.values():
+            for incident, polygon_names in robot_contacts.items():
+                contacts.setdefault(incident, set()).update(polygon_names)
+        return contacts
+
+    @staticmethod
+    def _robot_name(robot_ns: str) -> str:
+        return robot_ns.rstrip("/").rsplit("/", 1)[-1]
+
+    @staticmethod
+    def _collision_owner(robot_name: str, obstacle_id: str) -> str:
+        if not obstacle_id.startswith("<robot:") or not obstacle_id.endswith(">"):
+            return robot_name
+        other = obstacle_id.removeprefix("<robot:").removesuffix(">")
+        a, b = sorted((robot_name, other))
+        return f"robot_pair:{a},{b}"
+
+    @staticmethod
+    def _canonical_obstacle_id(robot_name: str, obstacle_id: str) -> str:
+        if not obstacle_id.startswith("<robot:") or not obstacle_id.endswith(">"):
+            return obstacle_id
+        other = obstacle_id.removeprefix("<robot:").removesuffix(">")
+        a, b = sorted((robot_name, other))
+        return f"<robot_pair:{a},{b}>"
 
 
 class BenchmarkRunner(ArenaMixinNode):
@@ -374,6 +444,7 @@ class BenchmarkRunner(ArenaMixinNode):
         self._episode_records: dict[int, dict[int, EpisodeRecord]] = {}
         self._collision_accumulators: dict[int, CollisionAccumulator] = {}
         self._collision_robot_topics: dict[int, set[str]] = {}
+        self._env_ns_roots: dict[int, str] = {}
         self._env_subs: dict[int, list] = {}
 
         self.create_subscription(EnvRegistry, "/arena/state/envs", self._on_envs, _LATCHED)
@@ -464,6 +535,7 @@ class BenchmarkRunner(ArenaMixinNode):
         self._episode_records[env_id] = {}
         self._collision_accumulators[env_id] = CollisionAccumulator()
         self._collision_robot_topics[env_id] = set()
+        self._env_ns_roots[env_id] = env_ns_root
 
         queue_client = self.create_client_wrapper(
             QueueEpisode, f"{env_ns_root}/config/queue_episode"
@@ -489,42 +561,7 @@ class BenchmarkRunner(ArenaMixinNode):
             if topics is None:
                 return
             for robot in msg.robots:
-                robot_ns = robot.ns.rstrip("/")
-                if not robot_ns:
-                    continue
-                topic = f"{robot_ns}/collision_events"
-                if topic in topics:
-                    continue
-                topics.add(topic)
-
-                def _on_collision_events(
-                    events_msg: CollisionEvents,
-                    *,
-                    _env_id: int = env_id,
-                    _robot_ns: str = robot_ns,
-                ) -> None:
-                    acc = self._collision_accumulators.get(_env_id)
-                    if acc is not None:
-                        acc.on_events(_robot_ns, events_msg)
-
-                self._env_subs.setdefault(env_id, []).append(
-                    self.create_subscription(CollisionEvents, topic, _on_collision_events, 10)
-                )
-                state_topic = f"{robot_ns}/collision_monitor_state"
-
-                def _on_collision_state(
-                    state_msg: CollisionMonitorState,
-                    *,
-                    _env_id: int = env_id,
-                    _robot_ns: str = robot_ns,
-                ) -> None:
-                    acc = self._collision_accumulators.get(_env_id)
-                    if acc is not None:
-                        acc.on_state(_robot_ns, state_msg)
-
-                self._env_subs.setdefault(env_id, []).append(
-                    self.create_subscription(CollisionMonitorState, state_topic, _on_collision_state, 10)
-                )
+                self._ensure_collision_subscription(env_id, robot.ns.rstrip("/"))
 
         sub_robots = self.create_subscription(
             RobotFleet,
@@ -547,7 +584,64 @@ class BenchmarkRunner(ArenaMixinNode):
         self._episode_records.pop(env_id, None)
         self._collision_accumulators.pop(env_id, None)
         self._collision_robot_topics.pop(env_id, None)
+        self._env_ns_roots.pop(env_id, None)
         self._env_visible_events.pop(env_id, None)
+
+    def _ensure_collision_subscription(self, env_id: int, robot_ns: str) -> None:
+        topics = self._collision_robot_topics.get(env_id)
+        if topics is None or not robot_ns:
+            return
+        topic = f"{robot_ns}/collision_events"
+        if topic in topics:
+            return
+        topics.add(topic)
+
+        def _on_collision_events(
+            events_msg: CollisionEvents,
+            *,
+            _env_id: int = env_id,
+            _robot_ns: str = robot_ns,
+        ) -> None:
+            acc = self._collision_accumulators.get(_env_id)
+            if acc is not None:
+                acc.on_events(_robot_ns, events_msg)
+
+        self._env_subs.setdefault(env_id, []).append(
+            self.create_subscription(CollisionEvents, topic, _on_collision_events, 10)
+        )
+        state_topic = f"{robot_ns}/collision_monitor_state"
+
+        def _on_collision_state(
+            state_msg: CollisionMonitorState,
+            *,
+            _env_id: int = env_id,
+            _robot_ns: str = robot_ns,
+        ) -> None:
+            acc = self._collision_accumulators.get(_env_id)
+            if acc is not None:
+                acc.on_state(_robot_ns, state_msg)
+
+        self._env_subs.setdefault(env_id, []).append(
+            self.create_subscription(CollisionMonitorState, state_topic, _on_collision_state, 10)
+        )
+
+    def _ensure_stage_collision_subscriptions(self, env_id: int, robot_arg: str) -> None:
+        env_ns_root = self._env_ns_roots.get(env_id)
+        if not env_ns_root:
+            return
+        names = [name for name in str(robot_arg).split(",") if name]
+        counts: dict[str, int] = {}
+        for name in names:
+            counts[name] = counts.get(name, 0) + 1
+        seen: dict[str, int] = {}
+        for name in names:
+            if counts[name] > 1:
+                idx = seen.get(name, 0)
+                seen[name] = idx + 1
+                robot_name = f"{name}_{idx}"
+            else:
+                robot_name = name
+            self._ensure_collision_subscription(env_id, f"{env_ns_root.rstrip('/')}/{robot_name}")
 
     async def _push_stage_config(self, env_id: int, step: Step) -> None:
         queue = self._queue_clients[env_id]
@@ -582,6 +676,7 @@ class BenchmarkRunner(ArenaMixinNode):
         ac = self._episode_action_clients[env_id]
 
         try:
+            self._ensure_stage_collision_subscriptions(env_id, step.stage.robot)
             for ep_idx in range(step.episodes):
                 goal = RunEpisode.Goal()
                 goal.world = step.stage.map
