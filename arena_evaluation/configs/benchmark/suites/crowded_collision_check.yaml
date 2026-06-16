@@ -1,0 +1,11 @@
+stages:
+  - name: map_empty_collision_stress_two_jackals
+    map: map_empty
+    robot: jackal,jackal
+    tm_robots: scenario
+    tm_obstacles: scenario
+    episodes: 1
+    timeout: 60s
+    config:
+      scenario:
+        file: collision_stress

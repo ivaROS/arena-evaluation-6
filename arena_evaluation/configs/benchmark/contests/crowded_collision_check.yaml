@@ -1,0 +1,23 @@
+- name: mppi
+  human: hunav
+  mobile.local_planner: mppi
+  mobile.inter_planner: navigate_w_replanning_time
+  mobile.safety_monitor: false
+
+- name: regulated-pure-pursuit
+  human: hunav
+  mobile.local_planner: regulated_pure_pursuit
+  mobile.inter_planner: navigate_w_replanning_time
+  mobile.safety_monitor: false
+
+- name: graceful
+  human: hunav
+  mobile.local_planner: graceful
+  mobile.inter_planner: navigate_w_replanning_time
+  mobile.safety_monitor: false
+
+- name: dwb-reference
+  human: hunav
+  mobile.local_planner: dwb
+  mobile.inter_planner: navigate_w_replanning_time
+  mobile.safety_monitor: false

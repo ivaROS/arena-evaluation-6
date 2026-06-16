@@ -14,9 +14,12 @@ from arena_evaluation.benchmark.config import Contest, Suite, _parse_duration
 from arena_evaluation.benchmark.runner import (
     CollisionAccumulator,
     _default_run_id,
+    _load_suite_contest,
     build_launch_args,
     build_pending,
+    make_timeout_episode_record,
 )
+import arena_evaluation.benchmark.runner as benchmark_runner
 from arena_evaluation.benchmark.state import ProgressLog, StateFile, compute_config_hash
 from arena_evaluation.benchmark.step import Step, StepErrorKind, StepResult
 from task_generator.constants import Constants
@@ -97,6 +100,31 @@ def test_step_key_uses_names():
         record_dir=None,
     )
     assert step.key == "teb/indoor_10"
+
+
+def test_load_suite_contest_falls_back_to_source_configs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+):
+    monkeypatch.setattr(
+        benchmark_runner,
+        "get_package_share_directory",
+        lambda _package: str(tmp_path),
+    )
+
+    suite, contest, _suite_dict, _contest_dict = _load_suite_contest(
+        "crowded_collision_check",
+        "crowded_collision_check_dwb",
+    )
+
+    assert suite.name == "crowded_collision_check"
+    assert [stage.name for stage in suite.stages] == [
+        "map_empty_collision_stress_two_jackals"
+    ]
+    assert contest.name == "crowded_collision_check_dwb"
+    assert [contestant.name for contestant in contest.contestants] == [
+        "dwb-safety-off"
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +388,68 @@ def test_progress_log_append_to_existing(tmp_path: pathlib.Path):
         reader = csv.DictReader(fh)
         rows = list(reader)
     assert len(rows) == 2
+
+
+def test_timeout_episode_record_can_be_written_to_progress(tmp_path: pathlib.Path):
+    stage = Suite.Stage(
+        name="timeout_stage",
+        episodes=1,
+        robot="jackal,jackal",
+        map="map_empty",
+        tm_robots=Constants.TaskMode.TM_Robots.SCENARIO,
+        tm_obstacles=Constants.TaskMode.TM_Obstacles.SCENARIO,
+        config={"scenario": {"file": "collision_stress"}},
+        seed=0,
+        timeout=180.0,
+    )
+    step = Step(
+        contestant=_make_contestant("dwb"),
+        stage=stage,
+        episodes=1,
+        record_dir=None,
+    )
+    rec = make_timeout_episode_record(step, episode_id=0)
+
+    log = ProgressLog(tmp_path / "progress.csv")
+    ts = datetime.datetime.now(tz=datetime.UTC).isoformat()
+    log.append(
+        ts_iso=ts,
+        run_id="timeout-run",
+        step_key=step.key,
+        contestant=step.contestant.name,
+        stage=step.stage.name,
+        env_id=0,
+        episode_id=0,
+        episode_record=rec,
+        started_at=10.0,
+        ended_at=190.0,
+        collision_count=1,
+        collision_events=[{
+            "robot_name": "jackal_0",
+            "robot_namespace": "/arena/env_0/task_generator_node/jackal_0",
+            "robot_ns": "/arena/env_0/task_generator_node/jackal_0",
+            "source": "collision_events",
+            "polygon_name": "StopPolygon",
+            "polygon_names": ["StopPolygon"],
+            "obstacle_id": "<wall>",
+        }],
+        error_kind=StepErrorKind.EPISODE_TIMEOUT,
+        error_detail="stage.timeout exceeded (180.0s)",
+    )
+    log.close()
+
+    with (tmp_path / "progress.csv").open(newline="") as fh:
+        rows = list(csv.DictReader(fh))
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["outcome_state"] == str(rec.outcome_state)
+    assert row["outcome_info"] == "timeout"
+    assert row["world"] == "map_empty"
+    assert row["robots"] == "jackal,jackal"
+    assert row["collision_count"] == "1"
+    assert json.loads(row["collision_events_json"])[0]["obstacle_id"] == "<wall>"
+    assert row["error_kind"] == "episode_timeout"
 
 
 # ---------------------------------------------------------------------------
@@ -731,6 +821,12 @@ def test_build_launch_args_empty_value_skipped():
     cell = _make_cell(contestant_args={"mobile.local_planner": ""})
     args = build_launch_args(cell, "gazebo")
     assert not any(a.startswith("mobile.local_planner") for a in args)
+
+
+def test_build_launch_args_false_value_forwarded():
+    cell = _make_cell(contestant_args={"mobile.safety_monitor": False})
+    args = build_launch_args(cell, "gazebo")
+    assert "mobile.safety_monitor:=False" in args
 
 
 def test_build_launch_args_arm_cap_forwarded():

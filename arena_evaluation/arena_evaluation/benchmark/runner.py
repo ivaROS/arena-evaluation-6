@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import time
+import types
 import typing
 
 _T = typing.TypeVar("_T")
@@ -90,7 +91,7 @@ def build_launch_args(step: Step, simulator: str | None) -> list[str]:
         args.append(f"record_data_dir:={step.record_dir}")
     own_keys = {a.split(":=", 1)[0] for a in args}
     for k, v in step.contestant.args.items():
-        if not v:
+        if v is None or v == "":
             continue
         if k in own_keys:
             _log.warning(
@@ -100,6 +101,27 @@ def build_launch_args(step: Step, simulator: str | None) -> list[str]:
             continue
         args.append(f"{k}:={v}")
     return args
+
+
+def make_timeout_episode_record(step: Step, episode_id: int):
+    obs_params, rob_params = _flatten_per_mode_params(
+        step.stage.config,
+        tm_obstacles=step.stage.tm_obstacles.value,
+        tm_robots=step.stage.tm_robots.value,
+    )
+    return types.SimpleNamespace(
+        episode_id=episode_id,
+        world=step.stage.map,
+        seed=step.stage.seed,
+        tm_robots=step.stage.tm_robots.value,
+        tm_obstacles=step.stage.tm_obstacles.value,
+        tm_modules=[],
+        robots=[name for name in str(step.stage.robot).split(",") if name],
+        outcome_state=EpisodeRecord.FAILED,
+        outcome_info="timeout",
+        robots_params=rob_params,
+        obstacles_params=obs_params,
+    )
 
 
 def build_pending(
@@ -698,15 +720,36 @@ class BenchmarkRunner(ArenaMixinNode):
                         timeout=step.stage.timeout,
                     )
                 except TimeoutError:
-                    if collision_acc is not None:
-                        collision_acc.end()
+                    ep_ended_sim = self.sim_time.to_seconds()
+                    collision_count, collision_events = (
+                        collision_acc.end() if collision_acc is not None else (0, [])
+                    )
                     episodes_failed += 1
                     self.get_logger().warning(
                         f"[{ep_idx + 1}/{step.episodes}] {step.key} env={env_id} "
-                        f"TIMEOUT after {step.stage.timeout}s; cancelling and advancing"
+                        f"TIMEOUT after {step.stage.timeout}s; "
+                        f"collisions={collision_count}; cancelling and advancing"
                     )
                     with contextlib.suppress(Exception):
                         await self.await_ros(goal_handle.cancel_goal_async())
+                    ts_iso = datetime.datetime.now(tz=datetime.UTC).isoformat()
+                    timeout_record = make_timeout_episode_record(step, ep_idx)
+                    self._run_dir.progress.append(
+                        ts_iso=ts_iso,
+                        run_id=self._run_id,
+                        step_key=step.key,
+                        contestant=step.contestant.name,
+                        stage=step.stage.name,
+                        env_id=env_id,
+                        episode_id=ep_idx,
+                        episode_record=timeout_record,
+                        started_at=ep_started_sim,
+                        ended_at=ep_ended_sim,
+                        collision_count=collision_count,
+                        collision_events=collision_events,
+                        error_kind=StepErrorKind.EPISODE_TIMEOUT,
+                        error_detail=f"stage.timeout exceeded ({step.stage.timeout}s)",
+                    )
                     continue
                 ep_ended_sim = self.sim_time.to_seconds()
                 ep_ended_wall = time.time()
@@ -1136,6 +1179,10 @@ def _load_suite_contest(
 ) -> tuple[Suite, Contest, dict, list | dict]:
     share = pathlib.Path(get_package_share_directory("arena_evaluation"))
     bench_dir = share / "configs" / "benchmark"
+    if not bench_dir.exists():
+        source_bench_dir = pathlib.Path(__file__).resolve().parents[2] / "configs" / "benchmark"
+        if source_bench_dir.exists():
+            bench_dir = source_bench_dir
 
     if _is_inline_suite(suite_name):
         suite_dict = yaml.safe_load(suite_name)
