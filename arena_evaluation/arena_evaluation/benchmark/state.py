@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import array
 import csv
 import dataclasses
 import hashlib
@@ -152,11 +153,24 @@ class StateFile:
         self.steps = dict(steps)
 
 
+def _json_safe(value: object) -> object:
+    # ROS array parameters can arrive as array.array; json.dumps cannot encode those directly.
+    if isinstance(value, array.array):
+        return list(value)
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    return value
+
+
 def _params_to_json(params: list) -> str:
     rows = []
     for p in params:
         try:
-            value = Parameter.from_parameter_msg(p).value
+            value = _json_safe(Parameter.from_parameter_msg(p).value)
         except Exception:
             value = str(p.value)
         rows.append({"name": p.name, "value": value})

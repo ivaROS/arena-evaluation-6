@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 import types
 import typing
 
@@ -732,8 +733,16 @@ class BenchmarkRunner(ArenaMixinNode):
                     )
                     with contextlib.suppress(Exception):
                         await self.await_ros(goal_handle.cancel_goal_async())
+                    # Give the task generator time to publish the canceled result and
+                    # clear its action_in_flight guard before the next episode goal.
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(
+                            self._await_or_env_died(env_id, ac.await_result(goal_handle)),
+                            timeout=10.0,
+                        )
                     ts_iso = datetime.datetime.now(tz=datetime.UTC).isoformat()
-                    timeout_record = make_timeout_episode_record(step, ep_idx)
+                    episode_id = ep_idx + 1
+                    timeout_record = make_timeout_episode_record(step, episode_id)
                     self._run_dir.progress.append(
                         ts_iso=ts_iso,
                         run_id=self._run_id,
@@ -741,7 +750,7 @@ class BenchmarkRunner(ArenaMixinNode):
                         contestant=step.contestant.name,
                         stage=step.stage.name,
                         env_id=env_id,
-                        episode_id=ep_idx,
+                        episode_id=episode_id,
                         episode_record=timeout_record,
                         started_at=ep_started_sim,
                         ended_at=ep_ended_sim,
@@ -828,9 +837,10 @@ class BenchmarkRunner(ArenaMixinNode):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.get_logger().exception(
+            self.get_logger().error(
                 f"{step.key} env={env_id} unexpected error mid-step after "
-                f"run={episodes_run}, failed={episodes_failed}"
+                f"run={episodes_run}, failed={episodes_failed}: {exc!r}\n"
+                f"{traceback.format_exc()}"
             )
             return StepResult(
                 step.key, "failed", env_id, started, time.time(),
