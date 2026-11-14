@@ -275,6 +275,17 @@ _LATCHED = QoSProfile(
 _SYSTEMIC = (StepErrorKind.ENV_SETUP, StepErrorKind.ROBOT_SETUP)
 
 
+def _launch_bool(value: str | None, *, default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    raise ValueError(f"expected a boolean launch argument, got {value!r}")
+
+
 class _EnvDied(Exception):
     """Raised when an env disappears from /arena/state/envs while the runner was waiting on it."""
 
@@ -286,8 +297,15 @@ class CollisionAccumulator:
     _STATE_SOURCE = "collision_monitor_state"
     _STOP_ACTION = 1
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        dedupe_robot_pairs: bool = True,
+        count_slow_polygons: bool = False,
+    ) -> None:
         self._active = False
+        self._dedupe_robot_pairs = dedupe_robot_pairs
+        self._counted_action = 2 if count_slow_polygons else self._STOP_ACTION
         self._current_by_robot_source: dict[tuple[str, str], set[tuple[str, str]]] = {}
         self._event_contacts_by_robot: dict[str, dict[tuple[str, str], set[str]]] = {}
         self._active_event_by_incident: dict[tuple[str, str], int] = {}
@@ -323,8 +341,14 @@ class CollisionAccumulator:
         for event in msg.events:
             if not event.polygon_name and not event.obstacle_id:
                 continue
-            obstacle_id = self._canonical_obstacle_id(robot_name, event.obstacle_id)
-            incident = (self._collision_owner(robot_name, event.obstacle_id), obstacle_id)
+            is_robot_pair = event.obstacle_id.startswith("<robot:") and event.obstacle_id.endswith(">")
+            if self._dedupe_robot_pairs or not is_robot_pair:
+                obstacle_id = self._canonical_obstacle_id(robot_name, event.obstacle_id)
+                owner = self._collision_owner(robot_name, event.obstacle_id)
+            else:
+                obstacle_id = event.obstacle_id
+                owner = robot_name
+            incident = (owner, obstacle_id)
             current.setdefault(incident, set()).add(event.polygon_name)
             current_robot_ns_by_incident[incident] = robot_ns
         self._event_contacts_by_robot[robot_ns] = current
@@ -351,7 +375,7 @@ class CollisionAccumulator:
             return
         current = {
             (msg.polygon_name, "<collision_monitor_state>")
-        } if msg.polygon_name and msg.action_type == self._STOP_ACTION else set()
+        } if msg.polygon_name and msg.action_type == self._counted_action else set()
         self._record_current(robot_ns, self._STATE_SOURCE, current)
 
     def _record_current(
@@ -452,6 +476,12 @@ class BenchmarkRunner(ArenaMixinNode):
         self._run_dir = run_dir
         self._retry_failed = retry_failed
         self._arena_passthrough: dict[str, str] = dict(arena_passthrough or {})
+        self._robot_robot_collisions = _launch_bool(
+            self._arena_passthrough.get("robot_robot_collisions"), default=True
+        )
+        self._count_slow_polygons = _launch_bool(
+            self._arena_passthrough.get("collision_count_slow_polygons"), default=False
+        )
         self._noexit = noexit
         self._total_groups = 0
         self._completed_groups = 0
@@ -556,7 +586,10 @@ class BenchmarkRunner(ArenaMixinNode):
             RunEpisode, action_name
         )
         self._episode_records[env_id] = {}
-        self._collision_accumulators[env_id] = CollisionAccumulator()
+        self._collision_accumulators[env_id] = CollisionAccumulator(
+            dedupe_robot_pairs=self._robot_robot_collisions,
+            count_slow_polygons=self._count_slow_polygons,
+        )
         self._collision_robot_topics[env_id] = set()
         self._env_ns_roots[env_id] = env_ns_root
 
