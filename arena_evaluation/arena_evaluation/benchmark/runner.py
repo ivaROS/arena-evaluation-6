@@ -477,7 +477,7 @@ class BenchmarkRunner(ArenaMixinNode):
         self._retry_failed = retry_failed
         self._arena_passthrough: dict[str, str] = dict(arena_passthrough or {})
         self._robot_robot_collisions = _launch_bool(
-            self._arena_passthrough.get("robot_robot_collisions"), default=True
+            self._arena_passthrough.get("robot_robot_collisions"), default=False
         )
         self._count_slow_polygons = _launch_bool(
             self._arena_passthrough.get("collision_count_slow_polygons"), default=False
